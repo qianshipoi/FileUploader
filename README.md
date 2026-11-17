@@ -265,6 +265,20 @@ docs/                               截图
 
 程序会把未处理异常写到 `%APPDATA%\FileUploader\crash.log`（含完整堆栈）；简洁模式的原生窗口若创建失败，主窗口也会自动回来，不会留下"窗口没了、托盘也没了"的僵局。
 
+## 发版（GitHub Release，全自动）
+
+推一个 `v` 开头的 tag，GitHub Actions 就会在 Windows runner 上打包**单文件便携版**并发布到 Release：
+
+```powershell
+git tag v0.1.0            # 版本号自定，tag 形如 v1.2.3 / v1.2.3-beta.1
+git push origin v0.1.0    # 推送 tag 即触发
+```
+
+- 流水线：`.github/workflows/release.yml`（tag 触发；也可在 Actions 页面手动输入 tag 重发，已存在的 Release 会覆盖上传）。
+- 产物：`FileUploader-<版本>-win-x64.exe`（≈89 MB，自带 .NET 10 运行时 + Windows App SDK）与同名 `.zip`。
+- Release 说明自动带上下载表格、SHA256 校验值和「上一个 tag → 本次 tag」的提交清单；tag 带 `-` 的（如 `v1.2.3-beta.1`）自动标为 pre-release。
+- 日常提交/PR 只跑 `.github/workflows/ci.yml`（编译 + 签名自测），不发版。
+
 ## 已知限制
 
 - 只实现单次 `PUT Object`（简单上传），没有分片/断点续传；阿里云 OSS 与 S3 简单上传上限均为 5 GB。

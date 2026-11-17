@@ -1,0 +1,45 @@
+name: CI
+
+# 日常提交/PR：只验证能编译（不发版）。发版走 release.yml（推 v* tag）。
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT: src/FileUploader.App/FileUploader.App.csproj
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  build:
+    name: 编译
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: 还原
+        shell: pwsh
+        run: dotnet restore src/FileUploader.App/FileUploader.App.csproj
+
+      - name: 编译（Release）
+        shell: pwsh
+        run: dotnet build $env:PROJECT -c Release --no-restore
+
+      - name: 签名 / 配置自测
+        shell: pwsh
+        run: dotnet run --project tools/FileUploader.Verify --configuration Release
