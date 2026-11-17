@@ -45,7 +45,7 @@ public sealed partial class UploadApp
             ? VStack(
                     6,
                     TextBlock("还没有上传记录").FontSize(13).Foreground(Theme.SecondaryText),
-                    TextBlock("把文件拖入上方区域，链接会留在这里，重启后也还在").FontSize(12).Foreground(Theme.TertiaryText))
+                    TextBlock("把文件拖入上方区域，记录会留在这里，重启后也还在；点「复制链接」随时生成新的下载地址").FontSize(12).Foreground(Theme.TertiaryText))
                 .Center()
             : ScrollView(VStack(8, items.Select(BuildHistoryRow).ToArray()));
 
@@ -108,7 +108,10 @@ public sealed partial class UploadApp
                 .FontSize(12)
                 .Foreground(Theme.SystemCritical)
                 .TextWrapping(),
-            _ => item.Url is null
+
+            // 签名链接每次复制都会重新生成，列表里显示它没有意义（还会误导人以为那个地址长期有效）；
+            // 直链模式下的地址是稳定的，仍然展示出来方便直接取用。
+            _ => item.Url is null || _settings.UrlMode != UrlMode.Direct
                 ? Empty()
                 : TextBlock(item.Url)
                     .FontSize(12)
