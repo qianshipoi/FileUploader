@@ -35,7 +35,18 @@ public static class Program
         OpenSettingsOnStartup = args.Any(a => string.Equals(a.Trim(), "--settings", StringComparison.OrdinalIgnoreCase));
         OpenCompactOnStartup = args.Any(a => string.Equals(a.Trim(), "--compact", StringComparison.OrdinalIgnoreCase));
 
-        ReactorApp.Run<UploadApp>("OSS 拖拽上传", width: 1040, height: 780, icon: AppIcon.Load());
+        // 主窗口默认居中显示（不指定 StartPosition 时是"系统按历史位置决定"，实测会贴在左上角）。
+        // CenterOnCurrent = 居中到鼠标所在的那块显示器，多屏下比固定居中到主屏更符合直觉。
+        ReactorApp.Run<UploadApp>(
+            new WindowSpec
+            {
+                Title = "OSS 拖拽上传",
+                Width = 1040,
+                Height = 780,
+                Icon = AppIcon.Load(),
+                StartPosition = WindowStartPosition.CenterOnCurrent,
+            },
+            null);
     }
 
     /// <summary>
