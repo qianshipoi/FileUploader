@@ -120,6 +120,9 @@ public static class SettingsStore
 
         public bool AutoCopyUrl { get; set; } = true;
 
+        /// <summary>右下角拖拽浮现上传气泡（旧配置文件里没有这个字段时按开启处理）。</summary>
+        public bool FlashDropEnabled { get; set; } = true;
+
         public static SettingsDto FromSettings(AppSettings s) => new()
         {
             Protocol = (int)s.Protocol,
@@ -137,6 +140,7 @@ public static class SettingsStore
             SignedUrlExpireDays = s.SignedUrlExpireDays,
             PublicReadObject = s.PublicReadObject,
             AutoCopyUrl = s.AutoCopyUrl,
+            FlashDropEnabled = s.FlashDropEnabled,
         };
 
         public AppSettings ToSettings(string secret) => new()
@@ -156,6 +160,7 @@ public static class SettingsStore
             SignedUrlExpireDays = SignedUrlExpireDays <= 0 ? 7 : SignedUrlExpireDays,
             PublicReadObject = PublicReadObject,
             AutoCopyUrl = AutoCopyUrl,
+            FlashDropEnabled = FlashDropEnabled,
         };
     }
 }

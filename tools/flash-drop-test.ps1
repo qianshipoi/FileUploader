@@ -10,6 +10,10 @@ $ErrorActionPreference = "Stop"
 
 $AE = [System.Windows.Automation.AutomationElement]
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$AE = [System.Windows.Automation.AutomationElement]
+$TS = [System.Windows.Automation.TreeScope]
 
 $src = @'
 using System;
@@ -23,7 +27,7 @@ public static class FlashProbe
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder sb, int max);
-    [DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(POINT p, uint flags);
+    [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
     [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
 
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
@@ -50,10 +54,10 @@ public static class FlashProbe
         return ClassOf(WindowFromPoint(p));
     }
 
-    public static int[] WorkAreaRightBottom()
+    // 气泡贴在「鼠标所在显示器」的右下角，所以期望值要按窗口自己那块屏算，不能写死主屏
+    public static int[] WorkAreaFor(IntPtr hwnd)
     {
-        var p = new POINT { X = 10, Y = 10 };
-        var monitor = MonitorFromPoint(p, 2);
+        var monitor = MonitorFromWindow(hwnd, 2);
         var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
         if (!GetMonitorInfo(monitor, ref info)) return new[] { 1920, 1080 };
         return new[] { info.rcWork.Right, info.rcWork.Bottom };
@@ -95,10 +99,10 @@ if ($hwnd -eq [IntPtr]::Zero) {
 
 $rect = New-Object 'FlashProbe+RECT'
 [void][FlashProbe]::GetWindowRect($hwnd, [ref]$rect)
-$work = [FlashProbe]::WorkAreaRightBottom()
+$work = [FlashProbe]::WorkAreaFor($hwnd)
 $expectedRight = $work[0] - 20
 $expectedBottom = $work[1] - 8
-Write-Output "  rect=$($rect.Left),$($rect.Top)-$($rect.Right),$($rect.Bottom)  work=$($work[0])x$($work[1])"
+Write-Output "  rect=$($rect.Left),$($rect.Top)-$($rect.Right),$($rect.Bottom)  该屏工作区右下角=$($work[0]),$($work[1])"
 Check "贴在右下角（右边距 20 / 下边距 8）" `
     (([Math]::Abs($rect.Right - $expectedRight) -le 4) -and ([Math]::Abs($rect.Bottom - $expectedBottom) -le 4)) `
     "(期望 right=$expectedRight bottom=$expectedBottom)"
@@ -160,6 +164,84 @@ if ($hwnd2 -ne [IntPtr]::Zero) {
     Check "松手后才收起" ([bool]($after -match 'state -> Dormant'))
 }
 
+Write-Output "== 设置里可以关掉这个功能（改完立即生效）=="
+# 用便携模式跑（exe 旁边放 portable.txt + data\settings.json），完全不碰用户真实配置
+$outDir = Split-Path -Parent (Resolve-Path $exe).Path
+$portableMarker = Join-Path $outDir "portable.txt"
+$dataDir = Join-Path $outDir "data"
+$settingsFile = Join-Path $dataDir "settings.json"
+$boxName = '右下角拖拽浮现上传气泡（拖文件到屏幕右下角即上传）'
+
+function Get-SettingsWindow {
+    $proc = Get-Process -Name FileUploader -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $proc) { return $null }
+    $pidCond = New-Object System.Windows.Automation.PropertyCondition($AE::ProcessIdProperty, $proc.Id)
+    foreach ($w in $AE::RootElement.FindAll($TS::Children, $pidCond)) {
+        if ($w.Current.Name -eq '存储配置') { return $w }
+    }
+    return $null
+}
+
+function Open-Advanced([object]$win) {
+    $btn = $win.FindFirst($TS::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, '高级设置')))
+    if ($btn) {
+        try { $btn.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand() } catch { }
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+function Get-FlashBox([object]$win) {
+    return $win.FindFirst($TS::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $boxName)))
+}
+
+# 每次切换后 Reactor 会重建元素、Expander 也会收起来，所以每次都重新找一遍
+function Set-FlashToggle([string]$want) {
+    for ($i = 0; $i -lt 6; $i++) {
+        $win = Get-SettingsWindow
+        if (-not $win) { return $false }
+        Open-Advanced $win
+        $box = Get-FlashBox $win
+        if (-not $box) { continue }
+        $state = $box.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState.ToString()
+        if ($state -eq $want) { return $true }
+        $box.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+        Start-Sleep -Milliseconds 900
+    }
+    return $false
+}
+
+Get-Process -Name FileUploader -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Milliseconds 400
+try {
+    New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+    Set-Content -Path $portableMarker -Value "test" -Encoding UTF8
+
+    # 1) 配置里关着 → 启动就不该创建隐形窗口
+    Set-Content -Path $settingsFile -Value '{ "FlashDropEnabled": false }' -Encoding UTF8
+    Start-Process -FilePath (Resolve-Path $exe).Path -WorkingDirectory $outDir -ArgumentList "--settings"
+    Start-Sleep -Seconds 4
+    Check "配置关闭时启动不创建隐形窗口" ([FlashProbe]::Find() -eq [IntPtr]::Zero)
+
+    # 2) 界面上打开 → 立即生效
+    Check "能在设置里把开关打开" (Set-FlashToggle "On")
+    Start-Sleep -Milliseconds 1300
+    $afterOn = [FlashProbe]::Find()
+    Check "打开后隐形窗口立即出现" ($afterOn -ne [IntPtr]::Zero) "(hwnd=0x$($afterOn.ToInt64().ToString('X')))"
+
+    # 3) 界面上关掉 → 立即销毁
+    Check "能在设置里把开关关掉" (Set-FlashToggle "Off")
+    Start-Sleep -Milliseconds 1300
+    Check "关掉后隐形窗口立即销毁" ([FlashProbe]::Find() -eq [IntPtr]::Zero)
+
+    # 4) 状态确实落盘
+    $saved = Get-Content $settingsFile -Raw | ConvertFrom-Json
+    Check "开关状态已写进 settings.json" ($saved.FlashDropEnabled -eq $false)
+}
+finally {
+    Get-Process -Name FileUploader -ErrorAction SilentlyContinue | Stop-Process -Force
+    Remove-Item $portableMarker -ErrorAction SilentlyContinue
+    Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 if (-not $KeepOpen) {
     Get-Process -Name FileUploader -ErrorAction SilentlyContinue | Stop-Process -Force
 }

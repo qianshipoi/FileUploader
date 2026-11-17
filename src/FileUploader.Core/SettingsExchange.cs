@@ -154,6 +154,7 @@ public static class SettingsExchange
         SignedUrlExpireDays = settings.SignedUrlExpireDays,
         PublicReadObject = settings.PublicReadObject,
         AutoCopyUrl = settings.AutoCopyUrl,
+        FlashDropEnabled = settings.FlashDropEnabled,
     };
 
     private sealed class ExportDto
@@ -192,6 +193,9 @@ public static class SettingsExchange
 
         public bool AutoCopyUrl { get; set; } = true;
 
+        /// <summary>右下角拖拽浮现上传气泡（旧导出文件没有这个字段时按开启处理）。</summary>
+        public bool FlashDropEnabled { get; set; } = true;
+
         public AppSettings ToSettings() => new()
         {
             Protocol = Protocol == (int)StorageProtocol.S3Compatible ? StorageProtocol.S3Compatible : StorageProtocol.AliyunOss,
@@ -209,6 +213,7 @@ public static class SettingsExchange
             SignedUrlExpireDays = SignedUrlExpireDays <= 0 ? 7 : SignedUrlExpireDays,
             PublicReadObject = PublicReadObject,
             AutoCopyUrl = AutoCopyUrl,
+            FlashDropEnabled = FlashDropEnabled,
         };
     }
 }

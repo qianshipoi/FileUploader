@@ -165,7 +165,8 @@ public sealed class SettingsWindow : Component
                     _settings.UrlMode == UrlMode.Direct
                         ? CheckBox((bool?)_settings.PublicReadObject, value => SetField(s => s with { PublicReadObject = value }), "上传时把对象设为公共读（直链需要）")
                         : Empty(),
-                    CheckBox((bool?)_settings.AutoCopyUrl, value => SetField(s => s with { AutoCopyUrl = value }), "上传成功后自动复制链接")))
+                    CheckBox((bool?)_settings.AutoCopyUrl, value => SetField(s => s with { AutoCopyUrl = value }), "上传成功后自动复制链接"),
+                    CheckBox((bool?)_settings.FlashDropEnabled, value => SetField(s => s with { FlashDropEnabled = value }), "右下角拖拽浮现上传气泡（拖文件到屏幕右下角即上传）")))
                 .HAlign(HorizontalAlignment.Stretch)
                 .HorizontalContentAlignment(HorizontalAlignment.Stretch),
             TextBlock($"密钥用 Windows DPAPI 加密后保存在 {SettingsStore.FilePath}，仅当前 Windows 账户可解密。" +

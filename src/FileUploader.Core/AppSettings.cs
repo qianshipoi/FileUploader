@@ -67,6 +67,12 @@ public sealed record AppSettings
     /// <summary>上传成功后自动把链接写入剪贴板。</summary>
     public bool AutoCopyUrl { get; init; } = true;
 
+    /// <summary>
+    /// 屏幕右下角的「拖拽浮现」上传气泡：一开始拖文件就浮起来，拖上去松手即上传。
+    /// 关掉后不再创建那个隐形窗口，也不会装拖拽探测器。
+    /// </summary>
+    public bool FlashDropEnabled { get; init; } = true;
+
     /// <summary>去掉协议前缀与结尾斜杠后的 Endpoint。</summary>
     public string NormalizedEndpoint
     {

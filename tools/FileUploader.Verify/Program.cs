@@ -170,6 +170,7 @@ void RunVectors()
             KeyPrefix = "p/",
             UseDateFolder = false,
             PathStyle = true,
+            FlashDropEnabled = false,
         };
 
         SettingsStore.SaveTo(file, original);

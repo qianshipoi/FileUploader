@@ -93,6 +93,9 @@ internal sealed class FlashDropWindow : IDisposable
     private readonly Action _openMain;
     private readonly Action _openSettings;
     private readonly ManualResetEventSlim _ready = new(false);
+
+    /// <summary>窗口线程真正退出后置位：设置里关掉这个功能时要等它，避免新旧实例抢静态的 _active。</summary>
+    private readonly ManualResetEventSlim _closed = new(false);
     private readonly UploadQueue _queue = UploadQueue.Current;
     private readonly FileDropTarget _dropTarget;
     private DragWatcher? _watcher;
@@ -201,7 +204,14 @@ internal sealed class FlashDropWindow : IDisposable
             FlashLog.Info("EXCEPTION: " + ex);
             _ready.Set();
         }
+        finally
+        {
+            _closed.Set();
+        }
     }
+
+    /// <summary>等窗口线程真正退出（最多等 <paramref name="timeout"/>）。</summary>
+    public bool WaitForClose(TimeSpan timeout) => _closed.Wait(timeout);
 
     private void RunMessageLoopCore()
     {

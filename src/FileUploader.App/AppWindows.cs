@@ -53,7 +53,7 @@ internal static class AppWindows
     public static bool CanMinimizeToTray => _tray is not null;
 
     /// <summary>启动「拖拽浮现」上传气泡：拖文件到屏幕右下角就能直接传，不占位置。</summary>
-    public static void EnsureDragFlash() => DragFlashController.EnsureStarted();
+    public static void EnsureDragFlash() => DragFlashController.Apply();
 
     /// <summary>闪现气泡上的点击/右键：把主窗口叫回来。</summary>
     internal static void ShowMainFromFlash() => RunOnUi(ShowMainWindow);
@@ -274,7 +274,7 @@ internal static class AppWindows
     {
         _exiting = true;
         CloseBubble();
-        DragFlashController.Stop();
+        DragFlashController.Shutdown();
         try
         {
             _tray?.Dispose();
