@@ -110,7 +110,7 @@ dotnet publish src\FileUploader.App\FileUploader.App.csproj -c Release -o dist-p
 - **拖文件到圆上**即上传（和主窗口共用同一条队列，主窗口的历史里也能看到）。
 - 环上实时百分比；大文件在算 SHA-256 的几秒里显示「准备中」，不会一动不动。
 - 传完自动复制链接（7 天签名链接），圆里短暂显示 ✓「已复制」。
-- **单击圆**回到完整窗口；**右键**有「完整窗口 / 设置 / 退出」；按住圆可以拖动位置，窗口始终置顶、不占任务栏。
+- **单击圆**回到完整窗口；**右键**有「完整窗口 / 设置 / 退出」；按住圆可以拖动位置，窗口始终置顶、不占任务栏。拖动后的位置会记在 `bubble.json` 里，下次打开还在原处（只有气泡有一半以上跑到屏幕外时才回落到右下角）。
 - 直接以气泡启动：`FileUploader.exe --compact`，也可以顺手带文件：`FileUploader.exe --compact "D:\a.png"`。
 > **实现说明**：WinUI 3 没有逐像素透明窗口，这版 Windows App SDK 里也没有 `TransparentTintBackdrop`，
 > 所以气泡不是 WinUI 窗口 —— 它是一个 `WS_EX_LAYERED` 原生窗口，用 GDI+ 画到 32 位预乘位图再

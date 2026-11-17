@@ -184,7 +184,7 @@ internal sealed class NativeBubbleWindow : IDisposable
         }
 
         var size = ComputeWindowSize();
-        PlaceBottomRight(size);
+        PlaceInitial(size);
         ShowWindow(_hwnd, 4 /* SW_SHOWNOACTIVATE */);
         DragAcceptFiles(_hwnd, true);
         Subscribe();
@@ -350,7 +350,11 @@ internal sealed class NativeBubbleWindow : IDisposable
                 var wasDrag = _dragging && _moved;
                 _dragging = false;
                 _moved = false;
-                if (!wasDrag)
+                if (wasDrag)
+                {
+                    RememberPosition(hWnd);
+                }
+                else
                 {
                     _openFullWindow();
                 }
@@ -444,6 +448,33 @@ internal sealed class NativeBubbleWindow : IDisposable
     {
         var side = (int)Math.Round((BubbleDiameter + (ShadowPadding * 2)) * Scale());
         return new Size32 { Cx = side, Cy = side };
+    }
+
+    /// <summary>
+    /// 首次摆放：优先用上次记住的位置（气泡至少一半还在某个显示器工作区内），
+    /// 否则回落到右下角默认位置。
+    /// </summary>
+    private void PlaceInitial(Size32 size)
+    {
+        if (BubblePlacement.Load() is { } saved && BubblePlacement.IsMostlyVisible(saved.X, saved.Y, size.Cx, size.Cy))
+        {
+            SetWindowPos(_hwnd, IntPtr.Zero, saved.X, saved.Y, size.Cx, size.Cy, SwpNoActivate | SwpNoZOrder);
+            return;
+        }
+
+        PlaceBottomRight(size);
+    }
+
+    /// <summary>记住气泡当前停靠位置（拖动结束后调用）。</summary>
+    private void RememberPosition(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var rect = GetWindowRect(hWnd);
+        BubblePlacement.Save(rect.Left, rect.Top);
     }
 
     private void PlaceBottomRight(Size32 size)
