@@ -44,19 +44,16 @@ internal enum FlashDropState
 /// </summary>
 internal sealed class FlashDropWindow : IDisposable
 {
-    private const double PillWidth = 268;
-    private const double PillHeight = 58;
 
-    /// <summary>四周留白：画阴影用，同时也是「松手判定的余量」。</summary>
-    private const double ShadowPadding = 12;
 
-    private const double PillRadius = 14;
 
     private const int WmDestroy = 0x0002;
     private const int WmClose = 0x0010;
     private const int WmNcHitTest = 0x0084;
     private const int WmTimer = 0x0113;
     private const int WmDisplayChange = 0x007E;
+    private const int WmSettingChange = 0x001A;
+    private const int WmThemeChanged = 0x031A;
     private const int WmMouseActivate = 0x0021;
     private const int WmLeftButtonUp = 0x0202;
     private const int WmLeftButtonDown = 0x0201;
@@ -110,6 +107,7 @@ internal sealed class FlashDropWindow : IDisposable
 
     // 绘制快照。
     private volatile int _state = (int)FlashDropState.Dormant;
+    private bool _light = true;
     private volatile int _count;
     private volatile int _percent;
     private volatile bool _configured = true;
@@ -225,6 +223,7 @@ internal sealed class FlashDropWindow : IDisposable
         _active = this;
 
         var size = ComputeSize();
+        _light = FlashDropVisual.IsLightTheme();
         _hwnd = CreateWindowEx(
             WsExLayered | WsExToolWindow | WsExTopmost | WsExNoActivate,
             className,
@@ -338,6 +337,13 @@ internal sealed class FlashDropWindow : IDisposable
 
             case WmTimer:
                 OnTimer((int)wParam);
+                return IntPtr.Zero;
+
+            case WmSettingChange:
+            case WmThemeChanged:
+                _light = FlashDropVisual.IsLightTheme();
+                Place();
+                Render();
                 return IntPtr.Zero;
 
             case WmDisplayChange:
@@ -557,7 +563,7 @@ internal sealed class FlashDropWindow : IDisposable
         switch (state)
         {
             case FlashDropState.Peek:
-                _targetOpacity = 0.58f;
+                _targetOpacity = 0.74f;
                 SetTimer(_hwnd, TimerGrace, (uint)(graceMs > 0 ? graceMs : 1800), IntPtr.Zero);
                 break;
 
@@ -737,10 +743,16 @@ internal sealed class FlashDropWindow : IDisposable
     private Size32 ComputeSize()
     {
         var scale = Scale();
+        var state = (FlashDropState)_state;
+        var (title, subtitle, _) = FlashDropVisual.Texts(state, _configured, _count, _percent, _resultMessage);
+        var width = state == FlashDropState.Dormant
+            ? FlashDropVisual.MinPillWidth
+            : FlashDropVisual.MeasureWidth((float)scale, title, subtitle);
+
         return new Size32
         {
-            Cx = (int)Math.Round((PillWidth + (ShadowPadding * 2)) * scale),
-            Cy = (int)Math.Round((PillHeight + (ShadowPadding * 2)) * scale),
+            Cx = (int)Math.Round((width + (FlashDropVisual.ShadowPadding * 2)) * scale),
+            Cy = (int)Math.Round((FlashDropVisual.PillHeight + (FlashDropVisual.ShadowPadding * 2)) * scale),
         };
     }
 
@@ -786,9 +798,7 @@ internal sealed class FlashDropWindow : IDisposable
             graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
 
-            var scale = (float)(size.Cx / (PillWidth + (ShadowPadding * 2)));
             var state = (FlashDropState)_state;
-
             if (state == FlashDropState.Dormant)
             {
                 // 整窗 alpha=1：肉眼看不见，但像素是非零 alpha，命中测试仍然有效。
@@ -799,22 +809,14 @@ internal sealed class FlashDropWindow : IDisposable
 
             graphics.Clear(Color.Transparent);
 
-            var rect = new RectangleF(
-                (float)(ShadowPadding * scale),
-                (float)(ShadowPadding * scale),
-                (float)(PillWidth * scale),
-                (float)(PillHeight * scale));
+            var scale = (float)Scale();
+            var pad = (float)(FlashDropVisual.ShadowPadding * scale);
+            var pill = new RectangleF(pad, pad, size.Cx - (pad * 2), size.Cy - (pad * 2));
+            var (title, subtitle, icon) = FlashDropVisual.Texts(state, _configured, _count, _percent, _resultMessage);
 
-            DrawShadow(graphics, rect, scale);
-            using (var path = RoundedRect(rect, (float)(PillRadius * scale)))
-            using (var fill = new LinearGradientBrush(rect, Color.FromArgb(238, 38, 40, 44), Color.FromArgb(238, 24, 26, 30), LinearGradientMode.Vertical))
-            using (var border = new Pen(Color.FromArgb(56, 255, 255, 255), Math.Max(1f, scale)))
-            {
-                graphics.FillPath(fill, path);
-                graphics.DrawPath(border, path);
-            }
-
-            DrawContent(graphics, rect, scale, state);
+            FlashDropVisual.DrawShadow(graphics, pill, scale, _light, new Size(size.Cx, size.Cy));
+            FlashDropVisual.DrawSurface(graphics, pill, scale, _light, state);
+            FlashDropVisual.DrawContent(graphics, pill, scale, _light, state, title, subtitle, icon, _percent);
         }
 
         if (_opacity < 0.999f)
@@ -834,185 +836,7 @@ internal sealed class FlashDropWindow : IDisposable
         UpdateLayered(bitmap, size);
     }
 
-    private static void DrawShadow(Graphics graphics, RectangleF rect, float scale)
-    {
-        for (var i = 3; i >= 1; i--)
-        {
-            var spread = i * 2.2f * scale;
-            var offset = i * 1.2f * scale;
-            var shadowRect = RectangleF.Inflate(rect, spread, spread);
-            shadowRect.Offset(0, offset);
-            using var path = RoundedRect(shadowRect, (float)((PillRadius * scale) + spread));
-            using var brush = new SolidBrush(Color.FromArgb(14 + (i * 6), 0, 0, 0));
-            graphics.FillPath(brush, path);
-        }
-    }
 
-    private void DrawContent(Graphics graphics, RectangleF rect, float scale, FlashDropState state)
-    {
-        var iconBox = new RectangleF(
-            rect.Left + (16 * scale),
-            rect.Top + ((rect.Height - (32 * scale)) / 2f),
-            32 * scale,
-            32 * scale);
-
-        var (accentTop, accentBottom) = state switch
-        {
-            FlashDropState.Done => (Color.FromArgb(0x22, 0xC5, 0x5E), Color.FromArgb(0x10, 0x7C, 0x10)),
-            FlashDropState.Failed => (Color.FromArgb(0xE8, 0x55, 0x4B), Color.FromArgb(0xC4, 0x2B, 0x1C)),
-            FlashDropState.Armed => (Color.FromArgb(0x8E, 0xD2, 0xFF), Color.FromArgb(0x0F, 0x6C, 0xBD)),
-            FlashDropState.Peek => (Color.FromArgb(0x6F, 0x77, 0x86), Color.FromArgb(0x45, 0x4B, 0x57)),
-            _ => (Color.FromArgb(0x4A, 0x9C, 0xFF), Color.FromArgb(0x0F, 0x4C, 0xC6)),
-        };
-
-        using (var iconPath = RoundedRect(iconBox, 9f * scale))
-        using (var iconFill = new LinearGradientBrush(iconBox, accentTop, accentBottom, LinearGradientMode.Vertical))
-        {
-            graphics.FillPath(iconFill, iconPath);
-        }
-
-        var glyphColor = Color.White;
-        switch (state)
-        {
-            case FlashDropState.Done:
-                DrawCheck(graphics, iconBox, glyphColor, scale);
-                break;
-
-            case FlashDropState.Failed:
-                DrawExclamation(graphics, iconBox, glyphColor, scale);
-                break;
-
-            default:
-                DrawArrow(graphics, iconBox, glyphColor, scale);
-                break;
-        }
-
-        var textLeft = iconBox.Right + (12 * scale);
-        var textWidth = rect.Right - textLeft - (16 * scale);
-        var titleFontSize = 13.5f * scale;
-        var captionFontSize = 10.5f * scale;
-
-        using var titleFont = new Font("Microsoft YaHei UI", titleFontSize, FontStyle.Bold, GraphicsUnit.Pixel);
-        using var captionFont = new Font("Microsoft YaHei UI", captionFontSize, FontStyle.Regular, GraphicsUnit.Pixel);
-        using var titleBrush = new SolidBrush(Color.FromArgb(0xF2, 255, 255, 255));
-        using var captionBrush = new SolidBrush(Color.FromArgb(0xA8, 255, 255, 255));
-        using var format = new StringFormat
-        {
-            Alignment = StringAlignment.Near,
-            LineAlignment = StringAlignment.Center,
-            Trimming = StringTrimming.EllipsisCharacter,
-            FormatFlags = StringFormatFlags.NoWrap,
-        };
-
-        var (title, caption) = state switch
-        {
-            FlashDropState.Peek => (_configured ? "拖到这里上传" : "还没配置存储", "闪一下就走开也没关系"),
-            FlashDropState.Armed => ("松手即上传", $"{Math.Max(1, _count)} 个文件"),
-            FlashDropState.Uploading => ($"正在上传 {Math.Clamp(_percent, 0, 100)}%", $"{Math.Max(1, _count)} 个文件"),
-            FlashDropState.Done => (_resultMessage.Length > 0 ? _resultMessage : "已复制链接", "拖入即上传"),
-            _ => (_resultMessage.Length > 0 ? _resultMessage : "上传失败", "点一下看详情"),
-        };
-
-        var hasCaption = !string.IsNullOrEmpty(caption);
-        if (hasCaption)
-        {
-            var titleRect = new RectangleF(textLeft, rect.Top + (10 * scale), textWidth, 22 * scale);
-            var captionRect = new RectangleF(textLeft, titleRect.Bottom - (2 * scale), textWidth, 18 * scale);
-            graphics.DrawString(title, titleFont, titleBrush, titleRect, format);
-            graphics.DrawString(caption, captionFont, captionBrush, captionRect, format);
-        }
-        else
-        {
-            var titleRect = new RectangleF(textLeft, rect.Top, textWidth, rect.Height);
-            graphics.DrawString(title, titleFont, titleBrush, titleRect, format);
-        }
-
-        if (state == FlashDropState.Uploading)
-        {
-            var trackRect = new RectangleF(
-                rect.Left + (16 * scale),
-                rect.Bottom - (11 * scale),
-                rect.Width - (32 * scale),
-                3.5f * scale);
-
-            using (var trackPath = RoundedRect(trackRect, 2f * scale))
-            using (var trackBrush = new SolidBrush(Color.FromArgb(40, 255, 255, 255)))
-            {
-                graphics.FillPath(trackBrush, trackPath);
-            }
-
-            var percent = Math.Clamp(_percent, 0, 100) / 100f;
-            if (percent > 0.02f)
-            {
-                var fillRect = new RectangleF(trackRect.Left, trackRect.Top, trackRect.Width * percent, trackRect.Height);
-                using var fillPath = RoundedRect(fillRect, 2f * scale);
-                using var fillBrush = new SolidBrush(Color.FromArgb(0x4A, 0x9C, 0xFF));
-                graphics.FillPath(fillBrush, fillPath);
-            }
-        }
-    }
-
-    private static void DrawArrow(Graphics graphics, RectangleF box, Color color, float scale)
-    {
-        var centerX = box.Left + (box.Width / 2f);
-        var top = box.Top + (9 * scale);
-        var bottom = box.Bottom - (9.5f * scale);
-        using var pen = new Pen(color, Math.Max(1.4f, 2.0f * scale))
-        {
-            StartCap = LineCap.Round,
-            EndCap = LineCap.Round,
-            LineJoin = LineJoin.Round,
-        };
-
-        graphics.DrawLine(pen, centerX - (5.2f * scale), top + (4.6f * scale), centerX, top);
-        graphics.DrawLine(pen, centerX, top, centerX + (5.2f * scale), top + (4.6f * scale));
-        graphics.DrawLine(pen, centerX, top + (1.4f * scale), centerX, bottom);
-    }
-
-    private static void DrawCheck(Graphics graphics, RectangleF box, Color color, float scale)
-    {
-        using var pen = new Pen(color, Math.Max(1.6f, 2.4f * scale))
-        {
-            StartCap = LineCap.Round,
-            EndCap = LineCap.Round,
-            LineJoin = LineJoin.Round,
-        };
-
-        var cx = box.Left + (box.Width / 2f);
-        var cy = box.Top + (box.Height / 2f);
-        graphics.DrawLines(pen, new[]
-        {
-            new PointF(cx - (5.5f * scale), cy + (0.4f * scale)),
-            new PointF(cx - (1.6f * scale), cy + (4.2f * scale)),
-            new PointF(cx + (6.0f * scale), cy - (4.6f * scale)),
-        });
-    }
-
-    private static void DrawExclamation(Graphics graphics, RectangleF box, Color color, float scale)
-    {
-        using var pen = new Pen(color, Math.Max(1.6f, 2.4f * scale))
-        {
-            StartCap = LineCap.Round,
-            EndCap = LineCap.Round,
-        };
-
-        var cx = box.Left + (box.Width / 2f);
-        graphics.DrawLine(pen, cx, box.Top + (8 * scale), cx, box.Top + (17 * scale));
-        using var dot = new SolidBrush(color);
-        graphics.FillEllipse(dot, cx - (1.4f * scale), box.Top + (20.5f * scale), 2.8f * scale, 2.8f * scale);
-    }
-
-    private static GraphicsPath RoundedRect(RectangleF rect, float radius)
-    {
-        var diameter = Math.Max(1f, radius * 2);
-        var path = new GraphicsPath();
-        path.AddArc(rect.X, rect.Y, diameter, diameter, 180, 90);
-        path.AddArc(rect.Right - diameter, rect.Y, diameter, diameter, 270, 90);
-        path.AddArc(rect.Right - diameter, rect.Bottom - diameter, diameter, diameter, 0, 90);
-        path.AddArc(rect.X, rect.Bottom - diameter, diameter, diameter, 90, 90);
-        path.CloseFigure();
-        return path;
-    }
 
     private void UpdateLayered(Bitmap bitmap, Size32 size)
     {

@@ -126,6 +126,7 @@ dotnet publish src\FileUploader.App\FileUploader.App.csproj -c Release -o dist-p
 - 拖到别处松手 → 自动淡出，什么都不会发生。
 - 传完 → 「已复制链接」2.6 秒后淡出；没配置存储 → 显示「还没配置存储」，点一下直接进设置。
 - 气泡贴在**鼠标所在显示器**的工作区右下角（工作区已排除任务栏），多屏 / 高 DPI 都按当前屏算。
+- 外观跟随系统浅色 / 深色主题：半透明表面 + 1px 发丝描边 + 一层很淡的投影；宽度按文案自适应，图标用和应用图标同一套「箭头 + 底线」线条。
 
 ```powershell
 FileUploader.exe --flash-preview   # 开发用：依次演示 提示 → 可投放 → 上传中 → 完成
