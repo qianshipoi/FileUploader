@@ -190,6 +190,15 @@ internal static class AppWindows
             closedCallback: () => RunOnUi(OnBubbleClosed));
     }
 
+    /// <summary>
+    /// 主窗口「应该保持隐藏」的意图。延迟补隐藏只有在意图仍为隐藏时才生效，
+    /// 否则用户快速点气泡回来时会被补刀（见 <see cref="HideMainWindowAfter"/>）。
+    /// </summary>
+    private static bool _mainWindowShouldHide;
+
+    /// <summary>隐藏代次：每次显示主窗口就 +1，让队列里还没跑的延迟隐藏全部作废。</summary>
+    private static int _hideSequence;
+
     /// <summary>隐藏主窗口（Reactor 在内容挂载后才真正显示窗口，所以要多收几次）。</summary>
     private static void HideMainWindow()
     {
@@ -200,26 +209,42 @@ internal static class AppWindows
         }
 
         var handle = WinRT.Interop.WindowNative.GetWindowHandle(main.NativeWindow);
+        _mainWindowShouldHide = true;
+        var sequence = ++_hideSequence;
         ShowWindow(handle, SwHide);
 
         foreach (var delay in new[] { 250, 700, 1500 })
         {
-            _ = Task.Delay(delay).ContinueWith(
-                _ => RunOnUi(() =>
-                {
-                    if (IsWindowVisible(handle))
-                    {
-                        ShowWindow(handle, SwHide);
-                    }
-                }),
-                TaskScheduler.Default);
+            HideMainWindowAfter(handle, sequence, delay);
         }
+    }
+
+    /// <summary>
+    /// 延迟再收一次窗口。注意必须带「意图 + 代次」校验：
+    /// 用户可能在 1.5 秒内就点气泡回到完整窗口，这时若还照旧隐藏，
+    /// 就会出现「刚打开又被自动藏起来」的鬼畜行为。
+    /// </summary>
+    private static void HideMainWindowAfter(IntPtr handle, int sequence, int delayMs)
+    {
+        _ = Task.Delay(delayMs).ContinueWith(
+            _ => RunOnUi(() =>
+            {
+                if (sequence != _hideSequence || !_mainWindowShouldHide)
+                {
+                    return;
+                }
+
+                if (IsWindowVisible(handle))
+                {
+                    ShowWindow(handle, SwHide);
+                }
+            }),
+            TaskScheduler.Default);
     }
 
     /// <summary>从简洁模式回到完整窗口。</summary>
     public static void ExitCompact()
     {
-
         CloseBubble();
         ShowMainWindow();
     }
@@ -277,6 +302,10 @@ internal static class AppWindows
         {
             return;
         }
+
+        // 取消所有还在路上的「补隐藏」，否则刚显示出来又会被藏回去。
+        _mainWindowShouldHide = false;
+        _hideSequence++;
 
         ShowWindow(WinRT.Interop.WindowNative.GetWindowHandle(main.NativeWindow), SwShowNormal);
         main.Activate();
