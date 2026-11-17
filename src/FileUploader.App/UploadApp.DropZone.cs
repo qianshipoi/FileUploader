@@ -25,6 +25,7 @@ public sealed partial class UploadApp
         var stroke = ThemeResource.Brush(hovered ? "AccentFillColorDefaultBrush" : "ControlStrokeColorDefaultBrush")
                      ?? new SolidColorBrush(Windows.UI.Color.FromArgb(0x66, 0x86, 0x86, 0x86));
 
+        // 目标桶只是信息展示，别让它挡住「整块区域可点击」。
         var badge = Border(
                 TextBlock(target)
                     .FontSize(11)
@@ -34,7 +35,11 @@ public sealed partial class UploadApp
             .Background(Theme.SubtleFill)
             .CornerRadius(10)
             .Padding(10, 3)
-            .HAlign(HorizontalAlignment.Center);
+            .HAlign(HorizontalAlignment.Center)
+            .Set(border => border.IsHitTestVisible = false);
+
+        var title = hovered ? "松手即开始上传" : "点击选择文件，或把文件拖到这里";
+        var subtitle = hovered ? "松开鼠标就加入上传队列" : "支持多文件与文件夹 · 上传完成后自动复制链接";
 
         return Border(
                 Grid(
@@ -54,28 +59,36 @@ public sealed partial class UploadApp
                             })
                             .Grid(row: 0, column: 0, rowSpan: 2),
                         badge.Grid(row: 0, column: 0).HAlign(HorizontalAlignment.Right).Margin(0, 0, 2, 0),
+
+                        // 整块区域居中的说明文字（不再放「选择文件」按钮，整个框都是热区）。
                         VStack(
-                                8,
+                                10,
                                 Icon("Upload")
                                     .Width(hovered ? 30 : 26)
                                     .Height(hovered ? 30 : 26)
-                                    .Set(icon => icon.Foreground = ThemeResource.Brush(hovered ? "AccentTextFillColorPrimaryBrush" : "TextFillColorSecondaryBrush") ?? icon.Foreground)
-                                    .Margin(0, 0, 0, 2),
-                                TextBlock(hovered ? "松手即开始上传" : "把文件拖到这里")
+                                    .HAlign(HorizontalAlignment.Center)
+                                    .Set(icon => icon.Foreground = ThemeResource.Brush(hovered ? "AccentTextFillColorPrimaryBrush" : "TextFillColorSecondaryBrush") ?? icon.Foreground),
+                                TextBlock(title)
                                     .FontSize(17)
-                                    .SemiBold(),
-                                TextBlock("支持多文件与文件夹，上传完成后自动复制链接")
+                                    .SemiBold()
+                                    .HAlign(HorizontalAlignment.Center)
+                                    .Set(text => text.TextAlignment = TextAlignment.Center),
+                                TextBlock(subtitle)
                                     .FontSize(12)
-                                    .Foreground(Theme.SecondaryText),
-                                Button("选择文件…", OnPickFile)
-                                    .AccentButton()
-                                    .Margin(0, 6, 0, 0))
+                                    .Foreground(Theme.SecondaryText)
+                                    .HAlign(HorizontalAlignment.Center)
+                                    .Set(text => text.TextAlignment = TextAlignment.Center))
                             .Center()
-                            .Grid(row: 1, column: 0),
+                            .Grid(row: 0, column: 0, rowSpan: 2),
                     ]))
             .Background(hovered ? Theme.SubtleFill : Theme.CardBackground)
             .CornerRadius(16)
             .Padding(16)
+            .OnMount(border =>
+            {
+                // 整块区域点击即打开文件选择器（Border 有背景，所以整块都能命中）。
+                border.Tapped += (_, _) => OnPickFile();
+            })
             .OnDragEnter(args =>
             {
                 args.UIOverride.Caption = configured ? "上传到 OSS" : "请先在设置中配置存储";
@@ -106,7 +119,8 @@ public sealed partial class UploadApp
 
     /// <summary>
     /// 用 WinUI 的 FileOpenPicker 选文件（支持多选）。
-    /// 不用 Reactor 的 UseFilePickerAsync：那是渲染期钩子，在按钮事件里调用拿不到宿主窗口。
+    /// 入口是拖拽区的整块点击（见 <see cref="BuildDropZone"/>）。
+    /// 不用 Reactor 的 UseFilePickerAsync：那是渲染期钩子，在事件里调用拿不到宿主窗口。
     /// </summary>
     private async void OnPickFile()
     {
