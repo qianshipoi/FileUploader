@@ -10,13 +10,24 @@ public static class ObjectKey
     private static readonly char[] InvalidNameChars = Path.GetInvalidFileNameChars();
 
     /// <summary>
-    /// 生成对象键：<c>prefix/yyyy/MM/dd/相对路径/文件名</c>。
+    /// 生成对象键：<c>prefix/yyyy/MM/dd/防重名段/相对路径/文件名</c>。
+    /// <para>
+    /// 防重名段形如 <c>143530-a1b2c3d4</c>（上传时间 + 随机后缀），放在文件名之前：
+    /// 同一天重复上传同名文件不会互相覆盖，而 URL 的最后一段仍然是原始文件名，
+    /// 浏览器下载时保存下来的名字不会变成一串时间戳。
+    /// </para>
     /// </summary>
     /// <param name="settings">当前配置（使用前缀与日期分组开关）。</param>
     /// <param name="fileName">文件名（不含目录）。</param>
     /// <param name="relativeDirectory">拖入文件夹时的相对子目录，可为 null。</param>
-    /// <param name="timestamp">日期分组使用的时间。</param>
-    public static string Build(AppSettings settings, string fileName, string? relativeDirectory, DateTimeOffset timestamp)
+    /// <param name="timestamp">日期分组使用的时间（同时用于防重名段的时间前缀）。</param>
+    /// <param name="uniqueSegment">防重名段；传 null 时自动生成（测试可传入固定值）。</param>
+    public static string Build(
+        AppSettings settings,
+        string fileName,
+        string? relativeDirectory,
+        DateTimeOffset timestamp,
+        string? uniqueSegment = null)
     {
         var parts = new List<string>();
 
@@ -31,6 +42,8 @@ public static class ObjectKey
             parts.Add(timestamp.ToString("yyyy/MM/dd"));
         }
 
+        parts.Add(SanitizeSegment(uniqueSegment ?? CreateUniqueSegment(timestamp)));
+
         if (!string.IsNullOrWhiteSpace(relativeDirectory))
         {
             foreach (var segment in relativeDirectory.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries))
@@ -42,6 +55,10 @@ public static class ObjectKey
         parts.Add(SanitizeSegment(fileName));
         return string.Join('/', parts);
     }
+
+    /// <summary>生成防重名段：<c>HHmmss-随机 8 位十六进制</c>。</summary>
+    private static string CreateUniqueSegment(DateTimeOffset timestamp) =>
+        $"{timestamp:HHmmss}-{Guid.NewGuid():N}"[..15];
 
     /// <summary>去掉首尾斜杠，并把中间的反斜杠统一为斜杠（返回结果不带结尾斜杠）。</summary>
     public static string NormalizePrefix(string? prefix)

@@ -128,12 +128,28 @@ void RunVectors()
 
     // 对象键构造
     var settings = new AppSettings { KeyPrefix = "images", UseDateFolder = true };
-    Check(
-        "Key 构造（前缀 + 日期 + 文件名）",
-        ObjectKey.Build(settings, "示例 图.png", null, new DateTimeOffset(2026, 11, 16, 12, 0, 0, TimeSpan.FromHours(8))),
-        "images/2026/11/16/示例 图.png");
+    var fixedStamp = new DateTimeOffset(2026, 11, 16, 12, 0, 0, TimeSpan.FromHours(8));
 
-    Check("Key 构造（子目录）", ObjectKey.Build(settings with { UseDateFolder = false }, "a.png", @"sub\dir", DateTimeOffset.Now), "images/sub/dir/a.png");
+    // 防重名段固定成 "120000-a1b2c3d4" 以便断言；真实运行时由时间 + 随机后缀生成。
+    Check(
+        "Key 构造（前缀 + 日期 + 防重名段 + 文件名）",
+        ObjectKey.Build(settings, "示例 图.png", null, fixedStamp, "120000-a1b2c3d4"),
+        "images/2026/11/16/120000-a1b2c3d4/示例 图.png");
+
+    Check(
+        "Key 构造（中文文件名仍是最后一段，便于下载保留原名）",
+        ObjectKey.Build(settings, "示例 图.png", null, fixedStamp, "120000-a1b2c3d4").Split('/')[^1],
+        "示例 图.png");
+
+    Check(
+        "Key 构造（同一天同名文件两次上传不重名）",
+        ObjectKey.Build(settings, "a.png", null, fixedStamp) == ObjectKey.Build(settings, "a.png", null, fixedStamp) ? "same" : "different",
+        "different");
+
+    Check(
+        "Key 构造（子目录 + 不按日期分组）",
+        ObjectKey.Build(settings with { UseDateFolder = false }, "a.png", @"sub\dir", fixedStamp, "120000-a1b2c3d4"),
+        "images/120000-a1b2c3d4/sub/dir/a.png");
     Check("URL 编码", ObjectKey.EncodePath("a b/中文.png"), "a%20b/%E4%B8%AD%E6%96%87.png");
 
     // URL 生成（虚拟主机 / 路径风格 / 自定义域名）
