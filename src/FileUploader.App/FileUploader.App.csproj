@@ -16,7 +16,18 @@
     <RootNamespace>FileUploader.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <EnableMsixTooling>true</EnableMsixTooling>
+    <!-- exe 图标（资源管理器 / 任务栏 / 快捷方式） -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 运行时窗口图标要能按路径加载，所以随输出目录复制一份 -->
+    <Content Include="Assets\app.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- 单文件便携版没有「exe 旁边的 Assets 目录」，再内嵌一份兜底 -->
+    <EmbeddedResource Include="Assets\app.ico" LogicalName="app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.UI.Reactor" Version="0.1.0-preview.16" />

@@ -35,7 +35,7 @@ public static class Program
         OpenSettingsOnStartup = args.Any(a => string.Equals(a.Trim(), "--settings", StringComparison.OrdinalIgnoreCase));
         OpenCompactOnStartup = args.Any(a => string.Equals(a.Trim(), "--compact", StringComparison.OrdinalIgnoreCase));
 
-        ReactorApp.Run<UploadApp>("OSS 拖拽上传", width: 1040, height: 780);
+        ReactorApp.Run<UploadApp>("OSS 拖拽上传", width: 1040, height: 780, icon: AppIcon.Load());
     }
 
     /// <summary>

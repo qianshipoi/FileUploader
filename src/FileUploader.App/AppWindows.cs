@@ -73,7 +73,10 @@ internal static class AppWindows
             new NativeMenu.Item("退出", ExitApplication),
         });
     }
-    /// <summary>运行时画一个托盘图标（蓝色圆 + 白色上传箭头），避免依赖外部 .ico。</summary>
+    /// <summary>
+    /// 运行时画一个托盘图标：和应用图标同一套设计（蓝色圆角方块 + 白色上传箭头 + 底线）。
+    /// 托盘走原生 HICON 通道，喂不进 .ico 容器，所以这里用 GDI+ 现画，避免额外文件依赖。
+    /// </summary>
     private static WindowIcon BuildTrayIcon()
     {
         const int side = 32;
@@ -82,12 +85,27 @@ internal static class AppWindows
         {
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             graphics.Clear(Color.Transparent);
-            using var circle = new SolidBrush(Color.FromArgb(0xFF, 0x0F, 0x6C, 0xBD));
-            graphics.FillEllipse(circle, 1f, 1f, side - 2, side - 2);
-            using var pen = new Pen(Color.White, 2.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            graphics.DrawLine(pen, 16f, 23.5f, 16f, 10.5f);
-            graphics.DrawLine(pen, 10.5f, 16f, 16f, 10.5f);
-            graphics.DrawLine(pen, 21.5f, 16f, 16f, 10.5f);
+
+            var bounds = new RectangleF(0.5f, 0.5f, side - 1f, side - 1f);
+            using var path = RoundedRect(bounds, side * 0.215f);
+            using var brush = new LinearGradientBrush(
+                bounds,
+                Color.FromArgb(0x4A, 0x9C, 0xFF),
+                Color.FromArgb(0x0F, 0x4C, 0xC6),
+                LinearGradientMode.ForwardDiagonal);
+            graphics.FillPath(brush, path);
+
+            using var pen = new Pen(Color.White, 3.2f)
+            {
+                StartCap = LineCap.Round,
+                EndCap = LineCap.Round,
+                LineJoin = LineJoin.Round,
+            };
+            const float cx = side / 2f;
+            graphics.DrawLine(pen, cx - 5.4f, 13.4f, cx, 8.0f);   // 箭头左臂
+            graphics.DrawLine(pen, cx, 8.0f, cx + 5.4f, 13.4f);   // 箭头右臂
+            graphics.DrawLine(pen, cx, 9.6f, cx, 20.0f);          // 竖杆
+            graphics.DrawLine(pen, cx - 4.8f, 23.2f, cx + 4.8f, 23.2f); // 底线
         }
 
         var data = bitmap.LockBits(new Rectangle(0, 0, side, side), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
@@ -115,6 +133,19 @@ internal static class AppWindows
         }
 
         return WindowIcon.FromRgba(rgba, side, side);
+    }
+
+    /// <summary>圆角矩形路径。</summary>
+    private static GraphicsPath RoundedRect(RectangleF bounds, float radius)
+    {
+        var diameter = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(bounds.X, bounds.Y, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Y, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.X, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 
     /// <summary>打开（或激活）设置窗口。</summary>
