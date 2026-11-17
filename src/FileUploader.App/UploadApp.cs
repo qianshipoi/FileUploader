@@ -21,6 +21,8 @@ public sealed partial class UploadApp : Component
     private ImmutableArray<UploadItem> _items = UploadQueue.Current.Items;
     private bool _isDragOver;
     private Action<bool> _setDragOver = _ => { };
+    private bool _isHover;
+    private Action<bool> _setHover = _ => { };
     private Notice? _notice;
     private Action<Notice?> _setNotice = _ => { };
     private Guid? _copiedId;
@@ -33,6 +35,7 @@ public sealed partial class UploadApp : Component
         var (settings, setSettings) = UseState(SettingsState.Current.Value, threadSafe: true);
         var (items, setItems) = UseState(UploadQueue.Current.Items, threadSafe: true);
         var (isDragOver, setDragOver) = UseState(false);
+        var (isHover, setHover) = UseState(false);
         var (notice, setNotice) = UseState<Notice?>(null, threadSafe: true);
         var (copiedId, setCopiedId) = UseState<Guid?>(null, threadSafe: true);
 
@@ -40,6 +43,8 @@ public sealed partial class UploadApp : Component
         _items = items;
         _isDragOver = isDragOver;
         _setDragOver = setDragOver;
+        _isHover = isHover;
+        _setHover = setHover;
         _notice = notice;
         _setNotice = setNotice;
         _copiedId = copiedId;
@@ -146,9 +151,29 @@ public sealed partial class UploadApp : Component
                 HStack(
                         8,
                         Button("简洁模式", AppWindows.EnterCompact).SubtleButton().ToolTip("收成右下角的小气泡"),
-                        Button("设置", AppWindows.OpenSettings))
+                        BuildSettingsIconButton())
                     .Grid(column: 1),
             ]);
+
+    /// <summary>
+    /// 图标字体：Win11 用 Segoe Fluent Icons，Win10（1809+）用 Segoe MDL2 Assets。
+    /// 两个字体里 <c>\uE713</c> 都是齿轮，字形一致。
+    /// </summary>
+    private static string IconFontFamily =>
+        Environment.OSVersion.Version.Build >= 22000 ? "Segoe Fluent Icons" : "Segoe MDL2 Assets";
+
+    /// <summary>设置按钮：只有齿轮图标（文字按钮太占头部空间），靠 tooltip 和自动化名说明用途。</summary>
+    private static Element BuildSettingsIconButton() =>
+        Button("\uE713", AppWindows.OpenSettings)
+            .SubtleButton()
+            .FontFamily(IconFontFamily)
+            .FontSize(16)
+            .ToolTip("设置")
+            .AutomationName("设置")
+            // WinUI 按钮默认 MinWidth=120，图标按钮必须清掉，否则会撑成一条长条。
+            .MinWidth(0)
+            .MinHeight(0)
+            .Padding(11, 7, 11, 7);
 
     /// <summary>未配置时给出一次性引导；有临时提示时优先显示提示。</summary>
     private Element BuildBanner()

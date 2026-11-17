@@ -15,14 +15,16 @@ public sealed partial class UploadApp
     private Element BuildDropZone()
     {
         var hovered = _isDragOver;
+        var pointing = _isHover && !hovered;
+        var accent = hovered || pointing;
         var configured = _settings.IsConfigured;
         var protocol = _settings.Protocol == StorageProtocol.AliyunOss ? "阿里云 OSS" : "S3 兼容";
         var target = configured
             ? $"{_settings.Bucket} · {_settings.NormalizedEndpoint} · {protocol}"
             : "尚未配置存储";
 
-        // 虚线描边：空闲用控件描边色，拖拽进入时换成强调色并加粗。
-        var stroke = ThemeResource.Brush(hovered ? "AccentFillColorDefaultBrush" : "ControlStrokeColorDefaultBrush")
+        // 虚线描边：空闲用控件描边色，鼠标悬停或拖拽进入时换成强调色并加粗。
+        var stroke = ThemeResource.Brush(accent ? "AccentFillColorDefaultBrush" : "ControlStrokeColorDefaultBrush")
                      ?? new SolidColorBrush(Windows.UI.Color.FromArgb(0x66, 0x86, 0x86, 0x86));
 
         // 目标桶只是信息展示，别让它挡住「整块区域可点击」。
@@ -67,7 +69,7 @@ public sealed partial class UploadApp
                                     .Width(hovered ? 30 : 26)
                                     .Height(hovered ? 30 : 26)
                                     .HAlign(HorizontalAlignment.Center)
-                                    .Set(icon => icon.Foreground = ThemeResource.Brush(hovered ? "AccentTextFillColorPrimaryBrush" : "TextFillColorSecondaryBrush") ?? icon.Foreground),
+                                    .Set(icon => icon.Foreground = ThemeResource.Brush(accent ? "AccentTextFillColorPrimaryBrush" : "TextFillColorSecondaryBrush") ?? icon.Foreground),
                                 TextBlock(title)
                                     .FontSize(17)
                                     .SemiBold()
@@ -81,7 +83,7 @@ public sealed partial class UploadApp
                             .Center()
                             .Grid(row: 0, column: 0, rowSpan: 2),
                     ]))
-            .Background(hovered ? Theme.SubtleFill : Theme.CardBackground)
+            .Background(accent ? Theme.SubtleFill : Theme.CardBackground)
             .CornerRadius(16)
             .Padding(16)
             .OnMount(border =>
@@ -89,6 +91,8 @@ public sealed partial class UploadApp
                 // 整块区域点击即打开文件选择器（Border 有背景，所以整块都能命中）。
                 border.Tapped += (_, _) => OnPickFile();
             })
+            .OnPointerEntered((_, _) => _setHover(true))
+            .OnPointerExited((_, _) => _setHover(false))
             .OnDragEnter(args =>
             {
                 args.UIOverride.Caption = configured ? "上传到 OSS" : "请先在设置中配置存储";
