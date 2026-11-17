@@ -198,10 +198,7 @@ public sealed class SettingsWindow : Component
             [
                 HStack(
                         10,
-#pragma warning disable REACTOR_A11Y_001 // 文案是动态的，分析器看不到
-                        Button(_testing ? "测试中…" : "测试连接", OnTestConnection).IsEnabled(!_testing),
-#pragma warning restore REACTOR_A11Y_001
-                        _testing ? ProgressRing().Width(18).Height(18).AutomationName("正在测试连接") : Empty(),
+                        BuildTestButton(),
                         Button("打开配置目录", OpenSettingsFolder).SubtleButton(),
                         Button("导出配置", ExportSettings).SubtleButton())
                     .Grid(column: 0),
@@ -219,6 +216,24 @@ public sealed class SettingsWindow : Component
                     .Grid(column: 2),
             ]);
     }
+
+    /// <summary>
+    /// 「测试连接」按钮：图标（心电图）+ 文字的普通按钮。
+    /// 测试中图标变成从左到右扫过的心电监护样式、文字变成「测试中…」并禁用按钮；
+    /// 测试结束自动恢复。右侧不再单独放 ProgressRing。
+    /// </summary>
+    private Element BuildTestButton() =>
+        Button(
+                HStack(
+                        8,
+                        Component<TestPulseIcon, bool>(_testing),
+#pragma warning disable REACTOR_A11Y_001 // 文案是动态的，分析器看不到
+                        TextBlock(_testing ? "测试中…" : "测试连接").FontSize(14))
+#pragma warning restore REACTOR_A11Y_001
+                    .VAlign(VerticalAlignment.Center),
+                OnTestConnection)
+            .AutomationName(_testing ? "正在测试连接" : "测试连接")
+            .ToolTip(_testing ? "正在连接存储服务…" : "用当前配置测一次连接（桶不存在会自动创建）");
 
     /// <summary>
     /// 用「当前全局值」做变换：连续输入/勾选时不会互相覆盖（每个字段都基于最新值叠加）。
