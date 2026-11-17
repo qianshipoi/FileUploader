@@ -62,17 +62,30 @@ internal static class AppWindows
             ? $"{settings.Bucket} · {settings.NormalizedEndpoint}"
             : "未配置存储";
 
-        NativeMenu.Show(new[]
+        TrayMenu.Show(new[]
         {
-            new NativeMenu.Item(target, Click: null, IsEnabled: false),
-            NativeMenu.Item.Separator,
-            new NativeMenu.Item("打开主窗口", ShowMainWindow, IsDefault: true),
-            new NativeMenu.Item("简洁模式", EnterCompact),
-            new NativeMenu.Item("设置", OpenSettings),
-            NativeMenu.Item.Separator,
-            new NativeMenu.Item("退出", ExitApplication),
+            new TrayMenu.Item(target, IsHeader: true),
+            TrayMenu.Item.Separator,
+            new TrayMenu.Item("打开主窗口", ShowMainWindow),
+            new TrayMenu.Item("简洁模式", EnterCompact),
+            new TrayMenu.Item("设置", OpenSettings),
+            TrayMenu.Item.Separator,
+            new TrayMenu.Item("退出", ExitApplication),
         });
     }
+
+    /// <summary>开发辅助：配合 <c>--menu-preview</c> 启动参数直接弹一次托盘菜单，便于无鼠标回归（见 tools/uia-tray-menu.ps1）。</summary>
+    internal static void ShowTrayMenuForPreview() => ShowTrayMenu();
+
+    /// <summary>简洁模式气泡的右键菜单（和托盘菜单同一套现代化外观）。</summary>
+    private static void ShowCompactMenu() =>
+        TrayMenu.Show(new[]
+        {
+            new TrayMenu.Item("完整窗口", ExitCompact),
+            TrayMenu.Item.Separator,
+            new TrayMenu.Item("设置", OpenSettings),
+            new TrayMenu.Item("退出", ExitApplication),
+        });
     /// <summary>
     /// 运行时画一个托盘图标：和应用图标同一套设计（蓝色圆角方块 + 白色上传箭头 + 底线）。
     /// 托盘走原生 HICON 通道，喂不进 .ico 容器，所以这里用 GDI+ 现画，避免额外文件依赖。
@@ -187,6 +200,7 @@ internal static class AppWindows
             openFullWindow: () => RunOnUi(ExitCompact),
             openSettings: () => RunOnUi(OpenSettings),
             exitApplication: () => RunOnUi(ExitApplication),
+            showMenu: () => RunOnUi(ShowCompactMenu),
             closedCallback: () => RunOnUi(OnBubbleClosed));
     }
 

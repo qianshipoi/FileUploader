@@ -40,6 +40,7 @@ internal sealed class NativeBubbleWindow : IDisposable
     private readonly Action _openFullWindow;
     private readonly Action _openSettings;
     private readonly Action _exitApplication;
+    private readonly Action _showMenu;
     private readonly Action _closedCallback;
     private readonly ManualResetEventSlim _ready = new(false);
     private readonly UploadQueue _queue = UploadQueue.Current;
@@ -66,11 +67,12 @@ internal sealed class NativeBubbleWindow : IDisposable
     private Point _cursorStart;
     private Point _windowStart;
 
-    private NativeBubbleWindow(Action openFullWindow, Action openSettings, Action exitApplication, Action closedCallback)
+    private NativeBubbleWindow(Action openFullWindow, Action openSettings, Action exitApplication, Action showMenu, Action closedCallback)
     {
         _openFullWindow = openFullWindow;
         _openSettings = openSettings;
         _exitApplication = exitApplication;
+        _showMenu = showMenu;
         _closedCallback = closedCallback;
     }
 
@@ -84,9 +86,9 @@ internal sealed class NativeBubbleWindow : IDisposable
     }
 
     /// <summary>启动气泡（独立 STA 线程创建窗口）。</summary>
-    public static NativeBubbleWindow Start(Action openFullWindow, Action openSettings, Action exitApplication, Action closedCallback)
+    public static NativeBubbleWindow Start(Action openFullWindow, Action openSettings, Action exitApplication, Action showMenu, Action closedCallback)
     {
-        var bubble = new NativeBubbleWindow(openFullWindow, openSettings, exitApplication, closedCallback);
+        var bubble = new NativeBubbleWindow(openFullWindow, openSettings, exitApplication, showMenu, closedCallback);
         bubble._thread = new Thread(bubble.RunMessageLoop)
         {
             IsBackground = true,
@@ -356,7 +358,7 @@ internal sealed class NativeBubbleWindow : IDisposable
                 return IntPtr.Zero;
 
             case WmRightButtonUp:
-                ShowContextMenu(hWnd);
+                ShowContextMenu();
                 return IntPtr.Zero;
 
             case WmClose:
@@ -372,40 +374,8 @@ internal sealed class NativeBubbleWindow : IDisposable
         return DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
-    private void ShowContextMenu(IntPtr hWnd)
-    {
-        var menu = CreatePopupMenu();
-        if (menu == IntPtr.Zero)
-        {
-            return;
-        }
-
-        const uint mfString = 0x0000;
-        const uint mfSeparator = 0x0800;
-        AppendMenu(menu, mfString, 1, "完整窗口");
-        AppendMenu(menu, mfString, 2, "设置");
-        AppendMenu(menu, mfSeparator, 0, string.Empty);
-        AppendMenu(menu, mfString, 3, "退出");
-
-        GetCursorPos(out var point);
-        const uint tpmRightButton = 0x0002;
-        const uint tpmReturnCmd = 0x0100;
-        var command = TrackPopupMenu(menu, tpmRightButton | tpmReturnCmd, point.X, point.Y, 0, hWnd, IntPtr.Zero);
-        DestroyMenu(menu);
-
-        switch (command)
-        {
-            case 1:
-                _openFullWindow();
-                break;
-            case 2:
-                _openSettings();
-                break;
-            case 3:
-                _exitApplication();
-                break;
-        }
-    }
+    /// <summary>右键菜单交给 UI 线程的现代化菜单（<see cref="TrayMenu"/>）来画。</summary>
+    private void ShowContextMenu() => _showMenu();
 
     private void HandleDrop(IntPtr hDrop)
     {
@@ -871,18 +841,6 @@ internal sealed class NativeBubbleWindow : IDisposable
 
     [DllImport("shell32.dll")]
     private static extern void DragFinish(IntPtr hDrop);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr CreatePopupMenu();
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool AppendMenu(IntPtr menu, uint flags, IntPtr id, string text);
-
-    [DllImport("user32.dll")]
-    private static extern bool DestroyMenu(IntPtr menu);
-
-    [DllImport("user32.dll")]
-    private static extern int TrackPopupMenu(IntPtr menu, uint flags, int x, int y, int reserved, IntPtr hWnd, IntPtr rect);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool UpdateLayeredWindow(

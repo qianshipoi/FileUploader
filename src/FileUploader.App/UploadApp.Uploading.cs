@@ -21,6 +21,13 @@ public sealed partial class UploadApp
             AppWindows.OpenSettings();
         }
 
+        // 开发辅助：--menu-preview 启动即弹一次托盘菜单，方便用 UI 自动化回归菜单（不需要鼠标）。
+        if (Environment.GetCommandLineArgs().Contains("--menu-preview", StringComparer.OrdinalIgnoreCase))
+        {
+            await Task.Delay(600);
+            AppWindows.ShowTrayMenuForPreview();
+        }
+
         if (Program.OpenCompactOnStartup)
         {
             AppWindows.EnterCompact();
