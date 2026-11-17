@@ -1,0 +1,20 @@
+# 构建产物
+bin/
+obj/
+.vs/
+*.user
+
+# 发布产物（自己 dotnet publish 生成）
+dist/
+dist-portable/
+
+# 本地测试数据（Docker/RustFS、样例文件等）
+.testdata/
+
+# 导出的便携配置（含密钥，绝不能提交）
+FileUploader.export.bin
+FileUploader.export.json
+*.export.bin
+
+# 崩溃日志
+crash.log

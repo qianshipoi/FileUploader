@@ -1,0 +1,36 @@
+namespace FileUploader.Core;
+
+/// <summary>
+/// 数据和配置的存放位置。
+/// <para>
+/// 默认放在 <c>%APPDATA%\FileUploader</c>；如果 exe 同目录存在一个名为 <c>portable.txt</c>
+/// 的文件，则改为“便携模式”，配置与历史都写在 exe 旁边的 <c>data</c> 子目录里，
+/// 整个文件夹拷走即可换机器使用。
+/// </para>
+/// </summary>
+public static class AppPaths
+{
+    private const string PortableMarker = "portable.txt";
+
+    static AppPaths()
+    {
+        // 单文件发布时 AppContext.BaseDirectory 可能是解压目录，优先用真实 exe 路径。
+        var exeDirectory = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+        IsPortable = File.Exists(Path.Combine(exeDirectory, PortableMarker));
+        DataDirectory = IsPortable
+            ? Path.Combine(exeDirectory, "data")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FileUploader");
+    }
+
+    /// <summary>是否处于便携模式（exe 旁边有 portable.txt）。</summary>
+    public static bool IsPortable { get; }
+
+    /// <summary>配置与历史所在的目录。</summary>
+    public static string DataDirectory { get; }
+
+    /// <summary>配置文件路径。</summary>
+    public static string SettingsPath => Path.Combine(DataDirectory, "settings.json");
+
+    /// <summary>上传历史文件路径。</summary>
+    public static string HistoryPath => Path.Combine(DataDirectory, "history.json");
+}

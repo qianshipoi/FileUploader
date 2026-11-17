@@ -1,0 +1,14 @@
+# 统一换行，避免 Windows/Linux 来回改
+* text=auto
+
+*.cs      text diff=csharp
+*.csproj  text
+*.slnx    text
+*.md      text
+*.json    text
+*.ps1     text
+*.manifest text
+
+*.png     binary
+*.ico     binary
+*.exe     binary
