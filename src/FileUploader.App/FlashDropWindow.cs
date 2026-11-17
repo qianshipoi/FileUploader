@@ -64,6 +64,9 @@ internal sealed class FlashDropWindow : IDisposable
     private const int WmAppPreview = 0x8000 + 33;
     private const int WmAppQueue = 0x8000 + 34;
 
+    /// <summary>回归测试用：模拟「拖出去但还没松手」（只在 FU_FLASH_DEBUG=1 时生效）。</summary>
+    private const int WmAppSimulateLeave = 0x8000 + 35;
+
     private const int TimerFade = 1;
     private const int TimerGrace = 2;
     private const int TimerFlash = 3;
@@ -120,6 +123,7 @@ internal sealed class FlashDropWindow : IDisposable
 
     private int _previewStep;
     private bool _mouseDownOnSelf;
+    private bool _afterDragLeave;
     private int _lastHitResult = -2;
     private bool _hitEnabled = true;
 
@@ -331,6 +335,15 @@ internal sealed class FlashDropWindow : IDisposable
                 StartPreview();
                 return IntPtr.Zero;
 
+            case WmAppSimulateLeave:
+                if (FlashLog.DebugEnabled)
+                {
+                    _afterDragLeave = true;
+                    SetState(FlashDropState.Peek, graceMs: -1);
+                }
+
+                return IntPtr.Zero;
+
             case WmAppQueue:
                 OnQueueMessage();
                 return IntPtr.Zero;
@@ -400,7 +413,8 @@ internal sealed class FlashDropWindow : IDisposable
     {
         FlashLog.Info($"DragEnter: {paths.Count} 个文件");
         _count = paths.Count;
-        SetState(FlashDropState.Armed);
+        _afterDragLeave = false;
+        SetState(FlashDropState.Armed, graceMs: -1);
     }
 
     private void OnDropLeft()
@@ -408,14 +422,17 @@ internal sealed class FlashDropWindow : IDisposable
         FlashLog.Info("DragLeave");
         if ((FlashDropState)_state == FlashDropState.Armed)
         {
-            // 拖走了：先退回半透明提示，300ms 内没回来就收起来（避免来回抖动时闪个不停）。
-            SetState(FlashDropState.Peek, graceMs: 300);
+            // 拖走了：退回半透明提示并一直亮着，直到这次拖拽结束（松手/放下）才收起。
+            // 不能靠宽限定时器收：用户常常拖出去又拖回来，中途消失会很难受。
+            _afterDragLeave = true;
+            SetState(FlashDropState.Peek, graceMs: -1);
         }
     }
 
     private void OnDropped(IReadOnlyList<string> paths)
     {
         FlashLog.Info($"Drop: {paths.Count} 个文件 -> {string.Join(",", paths.Take(3))}");
+        _afterDragLeave = false;
         RefreshSnapshot();
         SetState(FlashDropState.Uploading);
         _ = EnqueueAsync(paths);
@@ -564,13 +581,21 @@ internal sealed class FlashDropWindow : IDisposable
         {
             case FlashDropState.Peek:
                 _targetOpacity = 0.74f;
-                SetTimer(_hwnd, TimerGrace, (uint)(graceMs > 0 ? graceMs : 1800), IntPtr.Zero);
+                if (graceMs >= 0)
+                {
+                    SetTimer(_hwnd, TimerGrace, (uint)(graceMs > 0 ? graceMs : 1800), IntPtr.Zero);
+                }
+
                 break;
 
             case FlashDropState.Armed:
                 _targetOpacity = 1f;
-                // 兜底：万一没收到 DragLeave / 拖拽结束信号，4 秒后自己收起来。
-                SetTimer(_hwnd, TimerGrace, 4000, IntPtr.Zero);
+                // 不设兜底定时器：一直停在「松手即上传」，直到拖走（DragLeave）或拖拽结束。
+                if (graceMs >= 0)
+                {
+                    SetTimer(_hwnd, TimerGrace, (uint)(graceMs > 0 ? graceMs : 4000), IntPtr.Zero);
+                }
+
                 break;
 
             case FlashDropState.Uploading:
@@ -613,6 +638,7 @@ internal sealed class FlashDropWindow : IDisposable
 
     private void Hibernate()
     {
+        _afterDragLeave = false;
         Interlocked.Exchange(ref _pendingResult, 0);
         SetState(FlashDropState.Dormant);
     }
@@ -676,6 +702,15 @@ internal sealed class FlashDropWindow : IDisposable
         }
 
         var buttonDown = (GetAsyncKeyState(VkLeftButton) & 0x8000) != 0;
+
+        // 拖走之后保持半透明亮着，直到这次拖拽真的结束（左键松开）才收起：
+        // 用户经常拖出去又拖回来，中途消失很难受。这里用轮询兜底，不依赖钩子一定收到结束事件。
+        if (_afterDragLeave && (FlashDropState)_state == FlashDropState.Peek && !buttonDown)
+        {
+            Hibernate();
+            return;
+        }
+
         var shouldHit = (FlashDropState)_state != FlashDropState.Dormant || buttonDown;
         if (shouldHit == _hitEnabled)
         {
@@ -709,7 +744,8 @@ internal sealed class FlashDropWindow : IDisposable
         {
             case 1:
                 _count = 2;
-                SetState(FlashDropState.Armed);
+                _afterDragLeave = false;
+                SetState(FlashDropState.Armed, graceMs: -1);
                 SetTimer(_hwnd, TimerPreview, 1300, IntPtr.Zero);
                 break;
 
@@ -1037,13 +1073,13 @@ internal sealed class FlashDropWindow : IDisposable
 internal static class FlashLog
 {
     /// <summary>只有显式打开调试环境变量时才写日志（回归脚本用）。</summary>
-    private static readonly bool Enabled = Environment.GetEnvironmentVariable("FU_FLASH_DEBUG") == "1";
+    public static bool DebugEnabled { get; } = Environment.GetEnvironmentVariable("FU_FLASH_DEBUG") == "1";
 
     private static readonly object Gate = new();
 
     public static void Info(string message)
     {
-        if (!Enabled)
+        if (!DebugEnabled)
         {
             return;
         }

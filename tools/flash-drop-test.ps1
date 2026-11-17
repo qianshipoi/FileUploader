@@ -32,6 +32,10 @@ public static class FlashProbe
 
     public static IntPtr Find() => FindWindow("FileUploaderFlashDrop", null);
 
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
+
     public static string ClassOf(IntPtr h)
     {
         if (h == IntPtr.Zero) return "(null)";
@@ -119,6 +123,42 @@ $log = Get-Content $logPath -ErrorAction SilentlyContinue
 Check "OLE 落点注册成功（RegisterDragDrop=0）" ([bool]($log -match 'RegisterDragDrop -> 0x00000000'))
 Check "窗口线程启动正常" ([bool]($log -match 'controller: window ready=True'))
 Check "没有异常记录" (-not [bool]($log -match 'EXCEPTION'))
+
+Write-Output "== 拖出去后保持半透明，松手才收起 =="
+# 重新起一个不跑预览的实例：按住左键（模拟「正在拖拽」）→ 模拟拖离气泡 → 断言不消失 → 松手 → 断言收起
+Get-Process -Name FileUploader -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Milliseconds 400
+Remove-Item $logPath -ErrorAction SilentlyContinue
+Start-Process -FilePath (Resolve-Path $exe) -WorkingDirectory (Get-Location).Path
+
+$hwnd2 = [IntPtr]::Zero
+for ($i = 0; $i -lt 60; $i++) {
+    Start-Sleep -Milliseconds 150
+    $hwnd2 = [FlashProbe]::Find()
+    if ($hwnd2 -ne [IntPtr]::Zero) { break }
+}
+Check "重启后窗口仍然在" ($hwnd2 -ne [IntPtr]::Zero)
+if ($hwnd2 -ne [IntPtr]::Zero) {
+    $main = [FlashProbe]::FindWindow($null, "OSS 拖拽上传")
+    $mr = New-Object 'FlashProbe+RECT'
+    [void][FlashProbe]::GetWindowRect($main, [ref]$mr)
+    [void][FlashProbe]::SetCursorPos([int](($mr.Left + $mr.Right) / 2), [int](($mr.Top + $mr.Bottom) / 2))
+    Start-Sleep -Milliseconds 150
+    [FlashProbe]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)   # 按住左键
+    Start-Sleep -Milliseconds 200
+    [void][FlashProbe]::PostMessage($hwnd2, 0x8000 + 35, [IntPtr]::Zero, [IntPtr]::Zero)  # 模拟拖离
+    Start-Sleep -Milliseconds 1500
+
+    $during = Get-Content $logPath -ErrorAction SilentlyContinue
+    Check "拖离后仍停留在半透明提示（没被宽限定时器收掉）" `
+        ([bool]($during -match 'state -> Peek') -and -not [bool]($during -match 'state -> Dormant')) `
+        ""
+
+    [FlashProbe]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)   # 松手 = 拖拽结束
+    Start-Sleep -Milliseconds 700
+    $after = Get-Content $logPath -ErrorAction SilentlyContinue
+    Check "松手后才收起" ([bool]($after -match 'state -> Dormant'))
+}
 
 if (-not $KeepOpen) {
     Get-Process -Name FileUploader -ErrorAction SilentlyContinue | Stop-Process -Force
