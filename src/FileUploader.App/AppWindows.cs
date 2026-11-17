@@ -52,6 +52,12 @@ internal static class AppWindows
     /// <summary>托盘图标是否可用：不可用时关闭窗口就真的退出，避免程序"消失"。</summary>
     public static bool CanMinimizeToTray => _tray is not null;
 
+    /// <summary>启动「拖拽浮现」上传气泡：拖文件到屏幕右下角就能直接传，不占位置。</summary>
+    public static void EnsureDragFlash() => DragFlashController.EnsureStarted();
+
+    /// <summary>闪现气泡上的点击/右键：把主窗口叫回来。</summary>
+    internal static void ShowMainFromFlash() => RunOnUi(ShowMainWindow);
+
     /// <summary>把主窗口收进托盘（关闭按钮的默认行为）。</summary>
     public static void HideToTray() => HideMainWindow();
 
@@ -268,6 +274,7 @@ internal static class AppWindows
     {
         _exiting = true;
         CloseBubble();
+        DragFlashController.Stop();
         try
         {
             _tray?.Dispose();

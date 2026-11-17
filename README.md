@@ -29,6 +29,7 @@
 - **对象键可配**：前缀 + `yyyy/MM/dd` 日期目录 + **防重名段**（`时分秒-随机8位`）+ 原文件名（文件夹拖入时保留相对子目录）。同一天重复上传同名文件不会互相覆盖；防重名段在文件名之前，所以 URL 最后一段始终是原始文件名，下载保存的名字不变。
 - **链接形态可配**：虚拟主机 / 路径风格；直链模式支持自定义（CDN）域名与 `public-read` ACL。
 - **简洁模式（圆形气泡）**：收成右下角一个圆，拖文件上去就传，环上显示进度，传完自动复制链接并短暂显示「已复制」。主窗口的「简洁模式」按钮或 `FileUploader.exe --compact` 都能进。
+- **拖拽浮现（QQ 闪传式）**：平时完全隐形、不占位置；一开始拖文件，右下角就浮起一个半透明气泡，拖上去松手直接上传（拖的不是文件则立刻缩回），传完显示「已复制链接」后自动消失。
 - **托盘常驻**：点关闭不再退出，而是收进托盘；左键/双击托盘图标恢复主窗口，右键菜单有「打开主窗口 / 简洁模式 / 设置 / 退出」，只有点「退出」才真正结束进程。
 - **并发 3 路上传**、实时进度、失败重试、取消。
 - **命令行也能用**：`FileUploader.exe a.png b.txt`（或把文件拖到 exe 图标上）启动即上传；`FileUploader.exe --settings` 直接打开设置窗口。
@@ -116,6 +117,27 @@ dotnet publish src\FileUploader.App\FileUploader.App.csproj -c Release -o dist-p
 > 所以气泡不是 WinUI 窗口 —— 它是一个 `WS_EX_LAYERED` 原生窗口，用 GDI+ 画到 32 位预乘位图再
 > `UpdateLayeredWindow`：圆、阴影、进度环、文字全是画出来的，文件拖放走 `WM_DROPFILES`。
 > 主窗口隐藏/恢复用 Win32 `ShowWindow`（Reactor 会在挂载后把窗口显示出来，所以隐藏做了几次延迟收敛）。
+## 拖拽浮现（QQ 闪传式）
+
+不想开窗口、也不想常驻一个球的时候用这个：**平时完全看不见**——`alpha=1/255` 且带 `WS_EX_TRANSPARENT`，点击和拖拽全部穿透，不占位置、也不挡任何东西。
+
+- 开始拖文件 → 右下角淡入一个半透明提示「拖到这里上传」（约 1.8 秒没下文就自己消失）。
+- 把文件拖到它上面 → 变亮 + 「松手即上传 · n 个文件」，松手直接进入上传（和主窗口、简洁模式共用同一条队列）。
+- 拖到别处松手 → 自动淡出，什么都不会发生。
+- 传完 → 「已复制链接」2.6 秒后淡出；没配置存储 → 显示「还没配置存储」，点一下直接进设置。
+- 气泡贴在**鼠标所在显示器**的工作区右下角（工作区已排除任务栏），多屏 / 高 DPI 都按当前屏算。
+
+```powershell
+FileUploader.exe --flash-preview   # 开发用：依次演示 提示 → 可投放 → 上传中 → 完成
+```
+
+> **实现说明**：这不是 WinUI 窗口，而是一个 `WS_EX_LAYERED` 的原生窗口（独立 STA 线程 + 自己的消息循环 + `OleInitialize`）。
+> 落点走 `RegisterDragDrop` 的 `IDropTarget` 而不是 `DragAcceptFiles`：只有前者能在 `DragEnter` 里用 `CF_HDROP`
+> 判断「拖的是不是文件」，从而做到「拖上来才亮、不是文件立刻缩回」。
+> 装睡时给窗口加 `WS_EX_TRANSPARENT`，鼠标消息和拖放落点搜索都会直接跳过它（实测：逐像素 alpha 的分层窗口在
+> `WindowFromPoint` 里不走 `WM_NCHITTEST`，只有扩展样式这一层可靠）；只要有东西在显示、或者鼠标左键正按着，就摘掉这个样式。
+> 「有人开始拖了」用 `EVENT_SYSTEM_DRAGDROPSTART/END` 全局事件 + 低级鼠标钩子兜底，钩子装在专用线程上，
+> 避免界面卡顿时把全系统鼠标一起拖慢。误报的代价只是气泡闪一下，是否真的出现始终由拖放数据决定。
 ## 托盘
 
 - **关闭主窗口 = 收进托盘**（不会退出，上传队列继续跑）。托盘图标是运行时画的（蓝底白箭头），不依赖外部 `.ico`。
@@ -232,6 +254,10 @@ src/FileUploader.App/               WinUI 3 + Reactor 界面
   UploadApp.DropZone.cs             拖拽区域（整块点击选题 + DragEnter/Over/Leave/Drop）
   UploadApp.UploadList.cs           上传历史列表（复制 / 重试 / 移除 / 清空）
   NativeBubbleWindow.cs             简洁模式：分层窗口 + GDI+ 绘制的圆形气泡
+  FlashDropWindow.cs                拖拽浮现：隐形分层窗口 + 落点 + 淡入淡出状态机
+  DropTargetInterop.cs              IDropTarget / CF_HDROP 互操作（拖放数据里取文件路径）
+  DragWatcher.cs                    拖拽开始/结束探测（系统拖拽事件 + 低级鼠标钩子兜底）
+  DragFlashController.cs            拖拽浮现气泡的装配与开关
   UploadQueue.cs                    全局上传队列（主窗口与气泡共用）
   AppWindows.cs                     窗口切换：主窗口 / 设置 / 气泡 / 托盘图标与菜单
   UploadApp.Uploading.cs            上传队列（并发 3、进度、取消、历史落盘）
@@ -243,6 +269,7 @@ tools/FileUploader.Verify/          签名 / 上传 / 预签名链接自测
 tools/OssSdkCompare/                与阿里云官方 SDK 对比签名（回归用）
 tools/capture.ps1                   截图小工具（调试用）
 tools/uia-settings.ps1              设置窗口的 UI 自动化脚本（回归验证用）
+tools/flash-drop-test.ps1           拖拽浮现气泡回归（位置 / 命中穿透 / 落点注册）
 docs/                               截图
 ```
 
@@ -258,6 +285,7 @@ docs/                               截图
 - 失败态：网络不可达时红色提示条 + 行内错误 + 「重试/移除」。
 - 整块点击热区实测：在拖拽区中心点一下，只弹 1 个系统文件对话框（`_isPicking` 连点保护），取消后无异常提示且不产生上传记录。
 - 简洁模式反复进出 4 次（每次新建/销毁原生气泡窗口）进程稳定，无 `crash.log`；气泡窗口意外消失时主窗口会自动恢复。
+- 拖拽浮现气泡（`tools/flash-drop-test.ps1`）：窗口贴在右下角工作区、预览显示期间可命中自己、装睡时点击穿透到下层窗口、`RegisterDragDrop` 返回 0、无 `crash.log`。
 - 设置窗口与主窗口共享同一份配置：任一侧修改，另一侧即时刷新；密钥 DPAPI 加解密往返、落盘无明文。
 - `dotnet build`（Debug/Release）与 `dotnet publish` 均无警告无错误。
 

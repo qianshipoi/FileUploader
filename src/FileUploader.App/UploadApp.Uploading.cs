@@ -15,6 +15,14 @@ public sealed partial class UploadApp
         };
 
         AppWindows.EnsureTray();
+        AppWindows.EnsureDragFlash();
+
+        // 开发辅助：--flash-preview 走一遍「拖拽浮现」气泡的四个状态，方便截图与回归。
+        if (Program.FlashPreviewOnStartup)
+        {
+            await Task.Delay(900);
+            DragFlashController.Preview();
+        }
 
         if (Program.OpenSettingsOnStartup)
         {
