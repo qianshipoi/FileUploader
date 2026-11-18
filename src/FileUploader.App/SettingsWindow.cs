@@ -442,35 +442,23 @@ public sealed class SettingsWindow : Component
                 HStack(8, Button("打开发布页", OpenReleasePage).SubtleButton()));
         }
 
-        if (update.Status == UpdateCheckStatus.UpToDate)
-        {
-            return VStack(
-                10,
-                TextBlock($"当前版本 {update.CurrentVersion} 已经是最新。").FontSize(12),
-                HStack(8, Button("打开发布页", OpenReleasePage).SubtleButton()));
-        }
-
+        var hasUpdate = update.Status == UpdateCheckStatus.UpdateAvailable;
         var changes = update.Changes ?? Array.Empty<string>();
-        var rows = new List<Element>
-        {
-            TextBlock(
-                    $"当前版本 {update.CurrentVersion}  →  新版本 {update.LatestVersion}" +
-                    (update.PublishedAt is { } publishedAt ? $"      发布于 {publishedAt:yyyy-MM-dd}" : string.Empty))
-                .FontSize(12)
-                .Foreground(Theme.SecondaryText),
-        };
+        var published = update.PublishedAt is { } at ? at.ToString("yyyy-MM-dd") : null;
+        var rows = new List<Element>();
 
-        if (changes.Count == 0)
+        // 版本对照：有新版本时写"从哪儿到哪儿"，已经最新时写"你就是最新 + 这个版本什么时候发的"。
+        rows.Add(TextBlock(hasUpdate
+                ? $"当前版本 {update.CurrentVersion}  →  新版本 {update.LatestVersion}" + (published is null ? string.Empty : $"      发布于 {published}")
+                : $"当前版本 {update.CurrentVersion} 就是最新版本（{update.LatestVersion}）" + (published is null ? string.Empty : $"      发布于 {published}"))
+            .FontSize(12)
+            .Foreground(Theme.SecondaryText));
+
+        // 关键：不管有没有新版本，都把该版本的更新内容直接列出来 ——
+        // 已经最新时也能看到"我正在用的这个版本改了什么"，不用去点发布页。
+        if (changes.Count > 0)
         {
-            rows.Add(TextBlock("这个版本没有写变更清单，可以去发布页看完整说明。")
-                .FontSize(11)
-                .Foreground(Theme.TertiaryText)
-                .TextWrapping());
-        }
-        else
-        {
-            rows.Add(TextBlock($"本次更新 {changes.Count} 项：").FontSize(12));
-            // 变更多的时候在对话框里滚动，不要把窗口撑高。
+            rows.Add(TextBlock(hasUpdate ? $"本次更新 {changes.Count} 项：" : $"这个版本更新了 {changes.Count} 项：").FontSize(12));
             rows.Add(ScrollView(
                     VStack(4, changes
                         .Select((change, index) => TextBlock("· " + change)
@@ -481,23 +469,33 @@ public sealed class SettingsWindow : Component
                         .ToArray()))
                 .MaxHeight(260));
         }
-
-        if (string.IsNullOrEmpty(update.AssetUrl))
-        {
-            rows.Add(TextBlock("这个 Release 没有 win-x64 单文件 exe，请到发布页手动下载。")
-                .FontSize(11)
-                .Foreground(Theme.SystemCaution)
-                .TextWrapping());
-        }
         else
         {
-            var sizeText = update.AssetSize > 0
-                ? $"（约 {UploadItem.FormatSize(update.AssetSize)}）"
-                : string.Empty;
-            rows.Add(TextBlock($"点「立即更新并重启」会下载新版{sizeText}、校验 SHA256，然后替换当前 exe 并重启；配置与历史不受影响。")
+            rows.Add(TextBlock("这个 Release 没有写变更清单。")
                 .FontSize(11)
                 .Foreground(Theme.TertiaryText)
                 .TextWrapping());
+        }
+
+        if (hasUpdate)
+        {
+            if (string.IsNullOrEmpty(update.AssetUrl))
+            {
+                rows.Add(TextBlock("这个 Release 没有 win-x64 单文件 exe，请到发布页手动下载。")
+                    .FontSize(11)
+                    .Foreground(Theme.SystemCaution)
+                    .TextWrapping());
+            }
+            else
+            {
+                var sizeText = update.AssetSize > 0
+                    ? $"（约 {UploadItem.FormatSize(update.AssetSize)}）"
+                    : string.Empty;
+                rows.Add(TextBlock($"点「立即更新并重启」会下载新版{sizeText}、校验 SHA256，然后替换当前 exe 并重启；配置与历史不受影响。")
+                    .FontSize(11)
+                    .Foreground(Theme.TertiaryText)
+                    .TextWrapping());
+            }
         }
 
         rows.Add(HStack(8, Button("打开发布页", OpenReleasePage).SubtleButton()));
