@@ -63,6 +63,7 @@ internal sealed class FlashDropWindow : IDisposable
     private const int WmAppHibernate = 0x8000 + 32;
     private const int WmAppPreview = 0x8000 + 33;
     private const int WmAppQueue = 0x8000 + 34;
+    private const int WmAppSpyMove = 0x8000 + 36;
 
     /// <summary>回归测试用：模拟「拖出去但还没松手」（只在 FU_FLASH_DEBUG=1 时生效）。</summary>
     private const int WmAppSimulateLeave = 0x8000 + 35;
@@ -72,6 +73,14 @@ internal sealed class FlashDropWindow : IDisposable
     private const int TimerFlash = 3;
     private const int TimerPreview = 4;
     private const int TimerHit = 5;
+    private const int TimerSpy = 6;
+
+    /// <summary>回归测试用：模拟「拖出去但还没松手」（只在 FU_FLASH_DEBUG=1 时生效）。</summary>
+    private const int WhMouseLl = 14;
+    private const int WmMouseMove = 0x0200;
+
+    /// <summary>探针判定：按下后移动超过这么多像素才算「在拖」，避免单击误判。</summary>
+    private const int SpyThreshold = 6;
 
     private const int WsPopup = unchecked((int)0x80000000);
     private const int WsExLayered = 0x00080000;
@@ -126,9 +135,19 @@ internal sealed class FlashDropWindow : IDisposable
 
     private int _previewStep;
     private bool _mouseDownOnSelf;
+
+    // 「探针」：按住左键拖一小段距离后，把隐形窗口跟到光标下面，任何真实的 OLE 拖放
+    // 都会在 DragEnter 里暴露出来（选中文字不会有 OLE 拖放，所以不会误报）。
+    private bool _spyTracking;
+    private bool _spyArmed;
+    private bool _spyDone;
+    private Point32 _spyStart;
     private bool _afterDragLeave;
     private int _lastHitResult = -2;
     private bool _hitEnabled = true;
+
+    /// <summary>气泡本体的矩形（窗口内坐标，像素）：落点区域比它大一圈，只有它接受点击。</summary>
+    private RectangleF _pillRect;
 
 
     private FlashDropWindow(Action openMain, Action openSettings)
@@ -139,7 +158,8 @@ internal sealed class FlashDropWindow : IDisposable
             accepts: () => true,
             entered: OnDropEntered,
             dropped: OnDropped,
-            left: OnDropLeft);
+            left: OnDropLeft,
+            rejected: AbortSpy);
     }
 
     /// <summary>闪现气泡是否已经可用。</summary>
@@ -270,6 +290,7 @@ internal sealed class FlashDropWindow : IDisposable
         ShowWindow(_hwnd, 4 /* SW_SHOWNOACTIVATE */);
         UpdateHitTestStyle();
         SetTimer(_hwnd, TimerHit, 120, IntPtr.Zero);
+        SetTimer(_hwnd, TimerSpy, 30, IntPtr.Zero);
         Subscribe();
         Render();
 
@@ -354,6 +375,14 @@ internal sealed class FlashDropWindow : IDisposable
 
                 return IntPtr.Zero;
 
+            case WmAppSpyMove:
+                if (_spyArmed && !_spyDone && (FlashDropState)_state == FlashDropState.Dormant)
+                {
+                    MoveSpyTo((int)wParam, (int)lParam);
+                }
+
+                return IntPtr.Zero;
+
             case WmAppQueue:
                 OnQueueMessage();
                 return IntPtr.Zero;
@@ -422,6 +451,19 @@ internal sealed class FlashDropWindow : IDisposable
     private void OnDropEntered(IReadOnlyList<string> paths)
     {
         FlashLog.Info($"DragEnter: {paths.Count} 个文件");
+
+        if (_spyArmed && !_spyDone)
+        {
+            // 探针正好在光标下抓到了真实拖放：说明用户开始拖文件了。
+            // 把窗口收回右下角、亮起半透明提示，让用户自己拖过来。
+            _spyDone = true;
+            _count = paths.Count;
+            Place();
+            _afterDragLeave = true;
+            SetState(FlashDropState.Peek, graceMs: -1);
+            return;
+        }
+
         _count = paths.Count;
         _afterDragLeave = false;
         SetState(FlashDropState.Armed, graceMs: -1);
@@ -693,12 +735,58 @@ internal sealed class FlashDropWindow : IDisposable
             case TimerHit:
                 UpdateHitTestStyle();
                 break;
+
+            case TimerSpy:
+                UpdateSpy();
+                break;
         }
+    }
+
+    /// <summary>光标换了显示器就把窗口搬过去（只在拖拽开始时调用，避免气泡乱跳）。</summary>
+    private void EnsureOnCursorMonitor()
+    {
+        var cursor = new Point32();
+        if (!GetCursorPos(out cursor))
+        {
+            return;
+        }
+
+        var target = MonitorFromPoint(cursor, 2 /* MONITOR_DEFAULTTONEAREST */);
+        if (target == IntPtr.Zero || target == MonitorFromWindow(_hwnd, 2))
+        {
+            return;
+        }
+
+        Place();
+        FlashLog.Info("flash window moved to cursor monitor");
+    }
+
+    /// <summary>光标是不是落在气泡本体上（落点余量那片空白不接受点击，避免变成"隐形死区"）。</summary>
+    private bool IsCursorOverPill()
+    {
+        if (_pillRect.Width <= 0 || _pillRect.Height <= 0)
+        {
+            return false;
+        }
+
+        var rect = new Rect32();
+        if (!GetWindowRect(_hwnd, out rect))
+        {
+            return false;
+        }
+
+        var cursor = new Point32();
+        if (!GetCursorPos(out cursor))
+        {
+            return false;
+        }
+
+        return _pillRect.Contains(cursor.X - rect.Left, cursor.Y - rect.Top);
     }
 
     /// <summary>
     /// 装睡时给窗口加 <c>WS_EX_TRANSPARENT</c>：鼠标消息、拖放落点搜索都会直接跳过它，
-    /// 零死区；只要「有东西在显示」或者「鼠标左键正按着」，就把这个样式摘掉，让拖放能落上来。
+    /// 零死区；只要「鼠标左键正按着」（有人在拖东西）或者「光标停在气泡本体上」，就摘掉这个样式。
     /// <para>
     /// 不能只靠 <c>WM_NCHITTEST</c> 返回 <c>HTTRANSPARENT</c>：逐像素 alpha 的分层窗口在
     /// <c>WindowFromPoint</c> 里不走命中测试（实测），只有扩展样式这一层是可靠的。
@@ -713,6 +801,12 @@ internal sealed class FlashDropWindow : IDisposable
 
         var buttonDown = (GetAsyncKeyState(VkLeftButton) & 0x8000) != 0;
 
+        // 探针已经抓到过这次拖拽（DragEnter 收到过），确保窗口回到光标所在那块屏的右下角。
+        if (buttonDown && _spyDone)
+        {
+            EnsureOnCursorMonitor();
+        }
+
         // 拖走之后保持半透明亮着，直到这次拖拽真的结束（左键松开）才收起：
         // 用户经常拖出去又拖回来，中途消失很难受。这里用轮询兜底，不依赖钩子一定收到结束事件。
         if (_afterDragLeave && (FlashDropState)_state == FlashDropState.Peek && !buttonDown)
@@ -721,7 +815,9 @@ internal sealed class FlashDropWindow : IDisposable
             return;
         }
 
-        var shouldHit = (FlashDropState)_state != FlashDropState.Dormant || buttonDown;
+        var shouldHit = (FlashDropState)_state != FlashDropState.Dormant
+            ? (buttonDown || IsCursorOverPill())
+            : buttonDown;
         if (shouldHit == _hitEnabled)
         {
             return;
@@ -778,6 +874,100 @@ internal sealed class FlashDropWindow : IDisposable
         }
     }
 
+    // ── 拖拽探针 ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 「探针」：按住左键拖出几像素后，把隐形窗口跟到光标下面（30ms 一次）。
+    /// 这样任何真实的 OLE 拖放都会在我们的 DragEnter 里露面；而「拖选文字」没有 OLE 拖放，
+    /// 自然什么都不会发生 —— 这是目前唯一既准确又不误报的「拖拽开始」信号。
+    /// <para>
+    /// 为什么用轮询而不是低级鼠标钩子：实测在 OLE 拖拽期间系统根本不给钩子回调
+    /// （拖完松手才收到第一个事件），钩子这条路在拖拽场景下不可用。
+    /// </para>
+    /// </summary>
+    private void UpdateSpy()
+    {
+        if (_hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var buttonDown = (GetAsyncKeyState(VkLeftButton) & 0x8000) != 0;
+        if (!buttonDown)
+        {
+            if (_spyArmed)
+            {
+                FlashLog.Info("spy released");
+            }
+
+            _spyTracking = false;
+            _spyArmed = false;
+            _spyDone = false;
+            return;
+        }
+
+        var cursor = new Point32();
+        if (!GetCursorPos(out cursor))
+        {
+            return;
+        }
+
+        if (!_spyTracking)
+        {
+            _spyTracking = true;
+            _spyStart = cursor;
+            return;
+        }
+
+        if (!_spyArmed)
+        {
+            var dx = Math.Abs(cursor.X - _spyStart.X);
+            var dy = Math.Abs(cursor.Y - _spyStart.Y);
+            if (Math.Max(dx, dy) >= SpyThreshold)
+            {
+                _spyArmed = true;
+                FlashLog.Info("spy armed");
+            }
+        }
+
+        if (_spyArmed && !_spyDone && (FlashDropState)_state == FlashDropState.Dormant)
+        {
+            MoveSpyTo(cursor.X, cursor.Y);
+        }
+    }
+
+    /// <summary>
+    /// 探针抓到的不是文件（拖文本、拖图片等）：立刻把窗口让开，否则会把这次拖拽的落点吞掉。
+    /// </summary>
+    private void AbortSpy()
+    {
+        if (!_spyArmed && !_spyTracking)
+        {
+            return;
+        }
+
+        _spyDone = true;
+        _spyTracking = false;
+        Place();
+        FlashLog.Info("spy aborted (非文件拖拽)");
+    }
+
+    /// <summary>把隐形窗口挪到光标正下方（光标落在窗口中心）。</summary>
+    private void MoveSpyTo(int x, int y)
+    {
+        var size = ComputeSize();
+
+        // 每次移动都重新压到置顶带的最上层：如果拖拽源窗口自己也是置顶的（有些工具会这么干），
+        // 不重新抬一下就会被它盖住，探针就收不到 DragEnter。
+        SetWindowPos(
+            _hwnd,
+            new IntPtr(-1) /* HWND_TOPMOST */,
+            x - (size.Cx / 2),
+            y - (size.Cy / 2),
+            size.Cx,
+            size.Cy,
+            SwpNoActivate);
+    }
     // ── 摆放与绘制 ──────────────────────────────────────────────────────
 
     private double Scale()
@@ -797,8 +987,9 @@ internal sealed class FlashDropWindow : IDisposable
 
         return new Size32
         {
-            Cx = (int)Math.Round((width + (FlashDropVisual.ShadowPadding * 2)) * scale),
-            Cy = (int)Math.Round((FlashDropVisual.PillHeight + (FlashDropVisual.ShadowPadding * 2)) * scale),
+            // 窗口比气泡本体大一圈：左边 / 上边留出「落点余量」，拖拽时不用精准瞄准气泡本体。
+            Cx = (int)Math.Round((width + (FlashDropVisual.ShadowPadding * 2) + (FlashDropVisual.ZonePadX * 2)) * scale),
+            Cy = (int)Math.Round((FlashDropVisual.PillHeight + (FlashDropVisual.ShadowPadding * 2) + FlashDropVisual.ZonePadY) * scale),
         };
     }
 
@@ -857,7 +1048,12 @@ internal sealed class FlashDropWindow : IDisposable
 
             var scale = (float)Scale();
             var pad = (float)(FlashDropVisual.ShadowPadding * scale);
-            var pill = new RectangleF(pad, pad, size.Cx - (pad * 2), size.Cy - (pad * 2));
+            var pillWidth = size.Cx - (pad * 2) - (float)(FlashDropVisual.ZonePadX * 2 * scale);
+            var pillHeight = size.Cy - (pad * 2) - (float)(FlashDropVisual.ZonePadY * scale);
+
+            // 气泡贴着窗口右下角，多出来的左上区域就是落点余量（只在拖拽时生效）。
+            var pill = new RectangleF(size.Cx - pad - pillWidth, size.Cy - pad - pillHeight, pillWidth, pillHeight);
+            _pillRect = pill;
             var (title, subtitle, icon) = FlashDropVisual.Texts(state, _configured, _count, _percent, _resultMessage);
 
             FlashDropVisual.DrawShadow(graphics, pill, scale, _light, new Size(size.Cx, size.Cy));
@@ -1035,7 +1231,16 @@ internal sealed class FlashDropWindow : IDisposable
     private static extern uint GetDpiForWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    private static extern bool UnhookWindowsHookEx(IntPtr hook);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
     private static extern IntPtr MonitorFromPoint(Point32 point, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
 
     [DllImport("user32.dll")]
     private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);

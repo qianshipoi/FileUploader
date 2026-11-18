@@ -4,7 +4,7 @@ using System.Runtime.InteropServices.ComTypes;
 namespace FileUploader.App;
 
 /// <summary>
-/// OLE 拖放落点的互操作层：<see cref="IDropTarget"/> 定义 + 从 <c>IDataObject</c> 里取 <c>CF_HDROP</c> 路径。
+/// OLE 拖放落点的互操作层：<see cref="IDropTarget"/> 定义 + 从 <c>IDataObject</c> 里取文件路径。
 /// <para>
 /// 闪现气泡用它而不是 <c>DragAcceptFiles</c>：后者只在「松手」时送一个 <c>WM_DROPFILES</c>，
 /// 拿不到 <c>DragEnter</c>，也就没法在「拖到上面时高亮、不是文件时立刻缩回去」。
@@ -37,6 +37,10 @@ internal static class DropTargetInterop
 
     /// <summary>
     /// 从拖放数据对象里读出文件路径。不是文件（文本、图片、Outlook 附件这类虚拟文件）返回空列表。
+    /// <para>
+    /// 走 <c>CF_HDROP</c>：Explorer 拖文件过来时这条最稳（已用真实资源管理器拖拽验证）。
+    /// 虚拟文件（只有 FileGroupDescriptor、没有文件系统路径）拿不到，会返回空。
+    /// </para>
     /// </summary>
     public static IReadOnlyList<string> ReadFilePaths(object? dataObject)
     {
@@ -63,8 +67,9 @@ internal static class DropTargetInterop
 
             data.GetData(ref format, out medium);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            FlashLog.Info("ReadFilePaths: CF_HDROP 读取失败 " + ex.Message);
             return Array.Empty<string>();
         }
 
@@ -137,26 +142,32 @@ public sealed class FileDropTarget : IDropTarget
     private readonly Action<IReadOnlyList<string>> _entered;
     private readonly Action<IReadOnlyList<string>> _dropped;
     private readonly Action _left;
+    private readonly Action _rejected;
     private readonly Func<bool> _accepts;
 
     public FileDropTarget(
         Func<bool> accepts,
         Action<IReadOnlyList<string>> entered,
         Action<IReadOnlyList<string>> dropped,
-        Action left)
+        Action left,
+        Action rejected)
     {
         _accepts = accepts;
         _entered = entered;
         _dropped = dropped;
         _left = left;
+        _rejected = rejected;
     }
 
     /// <inheritdoc />
     public int DragEnter(object? dataObject, uint keyState, DropPoint point, ref uint effect)
     {
         var paths = DropTargetInterop.ReadFilePaths(dataObject);
+        FlashLog.Info($"DragEnter: paths={paths.Count} accepts={_accepts()}");
         if (paths.Count == 0 || !_accepts())
         {
+            // 不是文件：立刻让窗口让开，别把这个拖拽的落点吞掉。
+            _rejected();
             effect = DropTargetInterop.DropEffectNone;
             return 0;
         }
@@ -184,6 +195,7 @@ public sealed class FileDropTarget : IDropTarget
     public int Drop(object? dataObject, uint keyState, DropPoint point, ref uint effect)
     {
         var paths = DropTargetInterop.ReadFilePaths(dataObject);
+        FlashLog.Info($"Drop: paths={paths.Count}");
         if (paths.Count == 0)
         {
             effect = DropTargetInterop.DropEffectNone;

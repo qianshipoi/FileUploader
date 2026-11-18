@@ -108,14 +108,24 @@ Check "贴在右下角（右边距 20 / 下边距 8）" `
     "(期望 right=$expectedRight bottom=$expectedBottom)"
 Check "窗口可见（SW_SHOWNOACTIVATE）" ([FlashProbe]::IsWindowVisible($hwnd))
 
+# 窗口比气泡本体大一圈（左上留了落点余量），命中/穿透要分别取「气泡本体」和「空白区域」两个点
 $cx = [int](($rect.Left + $rect.Right) / 2)
 $cy = [int](($rect.Top + $rect.Bottom) / 2)
+$px = $rect.Right - 60
+$py = $rect.Bottom - 30
 
 Write-Output "== 显示时可命中 / 装睡时穿透 =="
 # 启动后约 0.9s 才开始预览，等它进入 Peek（半透明可见）再断言
-Start-Sleep -Milliseconds 1600
-$hitVisible = [FlashProbe]::Hit($cx, $cy)
-Check "预览显示期间能命中自己" ($hitVisible -eq "FileUploaderFlashDrop") "(hit=$hitVisible)"
+# 等预览真的进入 Peek（固定 sleep 容易撞到两次预览之间的空窗）
+$deadline = (Get-Date).AddSeconds(15)
+while ((Get-Date) -lt $deadline) {
+    if ((Get-Content $logPath -ErrorAction SilentlyContinue) -match 'state -> Peek') { break }
+    Start-Sleep -Milliseconds 100
+}
+[void][FlashProbe]::SetCursorPos($px, $py)   # 光标停在气泡本体上才会变成可命中
+Start-Sleep -Milliseconds 350
+$hitVisible = [FlashProbe]::Hit($px, $py)
+Check "预览显示期间（光标在气泡上）能命中自己" ($hitVisible -eq "FileUploaderFlashDrop") "(hit=$hitVisible)"
 
 # 等预览走完（Peek 1.2s + Armed 1.3s + Uploading 1.1s + Done 1.5s + 淡出）
 Start-Sleep -Milliseconds 6000
@@ -241,6 +251,44 @@ finally {
     Get-Process -Name FileUploader -ErrorAction SilentlyContinue | Stop-Process -Force
     Remove-Item $portableMarker -ErrorAction SilentlyContinue
     Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+Write-Output "== 拖选文字不会冒出气泡 =="
+# 在设置窗口的文本框里拖选一段文字：这也是一次"拖拽"，但不是文件拖放，气泡不该出现
+Get-Process -Name FileUploader -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Milliseconds 400
+Remove-Item $logPath -ErrorAction SilentlyContinue
+Start-Process -FilePath (Resolve-Path $exe).Path -ArgumentList "--settings" -WorkingDirectory (Get-Location).Path
+$win = $null
+for ($i = 0; $i -lt 60; $i++) {
+    Start-Sleep -Milliseconds 200
+    $win = Get-SettingsWindow
+    if ($win) { break }
+}
+Check "设置窗口已打开" ($win -ne $null)
+if ($win) {
+    $editCond = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
+    $edit = $win.FindFirst($TS::Descendants, $editCond)
+    if ($edit) {
+        $r = $edit.Current.BoundingRectangle
+        $x1 = [int]($r.X + 40)
+        $y1 = [int]($r.Y + ($r.Height / 2))
+        [void][FlashProbe]::SetCursorPos($x1, $y1)
+        Start-Sleep -Milliseconds 150
+        [FlashProbe]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 120
+        for ($s = 1; $s -le 8; $s++) {
+            [void][FlashProbe]::SetCursorPos($x1 + ($s * 10), $y1)
+            Start-Sleep -Milliseconds 50
+        }
+        Start-Sleep -Milliseconds 150
+        [FlashProbe]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 900
+        $log = Get-Content $logPath -ErrorAction SilentlyContinue
+        Check "拖选文字没有弹出气泡" (-not [bool]($log -match 'state -> Peek'))
+    }
+    else {
+        Check "找到设置里的文本框" $false
+    }
 }
 if (-not $KeepOpen) {
     Get-Process -Name FileUploader -ErrorAction SilentlyContinue | Stop-Process -Force

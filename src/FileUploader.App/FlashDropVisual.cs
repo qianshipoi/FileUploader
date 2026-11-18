@@ -25,6 +25,14 @@ internal static class FlashDropVisual
     /// <summary>最小气泡宽度（DIP）。</summary>
     public const double MinPillWidth = 196;
 
+    /// <summary>
+    /// 落点区域比气泡本体多出来的宽度 / 高度（DIP），向左、向上扩展。
+    /// 拖拽时整个窗口都是落点，所以文件拖到气泡左上方一点也能落进来，不用精准瞄准。
+    /// </summary>
+    public const double ZonePadX = 56;
+
+    public const double ZonePadY = 40;
+
     private const double MaxPillWidth = 380;
     private const double PadLeft = 16;
     private const double PadRight = 20;

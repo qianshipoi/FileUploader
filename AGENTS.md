@@ -102,7 +102,8 @@ dotnet run --project tools\FileUploader.Verify -c Release
 | `bubble-placement-test.ps1` | 气泡拖拽与位置记忆 |
 | `tray-menu-dismiss-test.ps1` | 托盘菜单点外关闭 |
 | `menu-shadow-probe.ps1` | 菜单阴影几何 |
-| `flash-drop-test.ps1` | 拖拽浮现气泡：位置 / 命中穿透 / 落点注册 / 拖离后不消失 |
+| `flash-drop-test.ps1` | 拖拽浮现气泡：位置 / 命中穿透 / 落点注册 / 拖离后不消失 / 设置开关 / 拖选文字不误报 |
+| `real-drag-onto-bubble.ps1` | 真实拖拽验证：资源管理器拖文件到气泡（ESC 取消，不会上传） |
 | `capture*.ps1`、`make-icon.py` | 截图与图标生成 |
 
 约定：
