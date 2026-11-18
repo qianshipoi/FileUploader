@@ -20,6 +20,19 @@ public sealed partial class UploadApp
         // 静默启动：主窗口在挂载后才会被 Reactor 显示出来，所以隐藏带几次延迟收敛。
         AppWindows.ApplyStartupVisibility();
 
+        // 开机自启：以注册表里的实际状态为准（exe 换目录会重写；被任务管理器禁用则把设置同步成关闭）。
+        switch (StartupRegistration.Sync(SettingsState.Current.Value, out var startupError))
+        {
+            case StartupSyncResult.Removed:
+                SettingsState.Current.Update(s => s with { StartWithWindows = false });
+                _setNotice(Notice.Info("开机自启的启动项已经不在了（可能是在任务管理器里禁用或被清理工具删掉），设置已同步为关闭。"));
+                break;
+            case StartupSyncResult.Failed:
+                CrashLog.Write("开机自启注册失败", new InvalidOperationException(startupError));
+                _setNotice(Notice.Error($"开机自启没有注册成功：{startupError}"));
+                break;
+        }
+
         // 开发辅助：--flash-preview 走一遍「拖拽浮现」气泡的四个状态，方便截图与回归。
         if (Program.FlashPreviewOnStartup)
         {

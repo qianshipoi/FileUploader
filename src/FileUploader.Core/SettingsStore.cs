@@ -126,6 +126,9 @@ public static class SettingsStore
         /// <summary>静默启动：不弹主窗口、只留托盘（旧配置文件里没有这个字段时按关闭处理）。</summary>
         public bool StartSilently { get; set; }
 
+        /// <summary>开机自启：写当前用户 Run 启动项（旧配置文件里没有这个字段时按关闭处理）。</summary>
+        public bool StartWithWindows { get; set; }
+
         public static SettingsDto FromSettings(AppSettings s) => new()
         {
             Protocol = (int)s.Protocol,
@@ -145,6 +148,7 @@ public static class SettingsStore
             AutoCopyUrl = s.AutoCopyUrl,
             FlashDropEnabled = s.FlashDropEnabled,
             StartSilently = s.StartSilently,
+            StartWithWindows = s.StartWithWindows,
         };
 
         public AppSettings ToSettings(string secret) => new()
@@ -166,6 +170,7 @@ public static class SettingsStore
             AutoCopyUrl = AutoCopyUrl,
             FlashDropEnabled = FlashDropEnabled,
             StartSilently = StartSilently,
+            StartWithWindows = StartWithWindows,
         };
     }
 }

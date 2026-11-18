@@ -221,6 +221,11 @@ public sealed class SettingsWindow : Component
                     _settings.StartSilently,
                     value => SetField(s => s with { StartSilently = value })),
                 ToggleRow(
+                    "开机自启",
+                    "登录 Windows 后自动启动本程序（当前用户，不需要管理员）。和「静默启动」一起打开，就是开机直接进托盘。",
+                    _settings.StartWithWindows,
+                    OnStartWithWindowsChanged),
+                ToggleRow(
                     "右下角拖拽浮现上传气泡",
                     "拖文件到屏幕右下角就浮出气泡，松手即上传；关掉后不再创建那个隐形窗口，也不装拖拽探测器。",
                     _settings.FlashDropEnabled,
@@ -267,6 +272,25 @@ public sealed class SettingsWindow : Component
                         .Grid(column: 1),
                 ])
             .Margin(0, 8, 0, 8);
+
+    /// <summary>
+    /// 开机自启的开关：先写注册表再落配置。
+    /// 写不进去（策略/权限）就把开关回滚成原状态并给红色提示 —— 不能让界面显示"已开启"而实际没有。
+    /// </summary>
+    private void OnStartWithWindowsChanged(bool enabled)
+    {
+        SetField(s => s with { StartWithWindows = enabled });
+        if (StartupRegistration.TrySet(enabled, out var error))
+        {
+            _setNotice(Notice.Info(enabled
+                ? "已加入开机自启（当前用户）；在任务管理器的「启动」页也能看到并关掉。"
+                : "已取消开机自启。"));
+            return;
+        }
+
+        SetField(s => s with { StartWithWindows = !enabled });
+        _setNotice(Notice.Error($"{(enabled ? "开启" : "关闭")}开机自启失败：{error}"));
+    }
 
     private void OnUrlModeChanged(int index) =>
         SetField(s => s with { UrlMode = index == 1 ? UrlMode.Direct : UrlMode.Signed });

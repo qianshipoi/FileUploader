@@ -172,6 +172,7 @@ void RunVectors()
             PathStyle = true,
             FlashDropEnabled = false,
             StartSilently = true,
+            StartWithWindows = true,
         };
 
         SettingsStore.SaveTo(file, original);

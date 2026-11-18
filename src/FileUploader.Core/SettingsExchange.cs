@@ -156,6 +156,7 @@ public static class SettingsExchange
         AutoCopyUrl = settings.AutoCopyUrl,
         FlashDropEnabled = settings.FlashDropEnabled,
         StartSilently = settings.StartSilently,
+        StartWithWindows = settings.StartWithWindows,
     };
 
     private sealed class ExportDto
@@ -200,6 +201,9 @@ public static class SettingsExchange
         /// <summary>静默启动：不弹主窗口、只留托盘（旧导出文件里没有这个字段时按关闭处理）。</summary>
         public bool StartSilently { get; set; }
 
+        /// <summary>开机自启：写当前用户 Run 启动项（旧导出文件里没有这个字段时按关闭处理）。</summary>
+        public bool StartWithWindows { get; set; }
+
         public AppSettings ToSettings() => new()
         {
             Protocol = Protocol == (int)StorageProtocol.S3Compatible ? StorageProtocol.S3Compatible : StorageProtocol.AliyunOss,
@@ -219,6 +223,7 @@ public static class SettingsExchange
             AutoCopyUrl = AutoCopyUrl,
             FlashDropEnabled = FlashDropEnabled,
             StartSilently = StartSilently,
+            StartWithWindows = StartWithWindows,
         };
     }
 }

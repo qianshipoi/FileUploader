@@ -6,6 +6,7 @@ param(
     [string]$Protocol = "",
     [switch]$ToggleHttps,
     [switch]$ToggleStartSilently,
+    [switch]$ToggleAutoStart,
     [switch]$ClickSave,
     [switch]$ClickClose,
     [switch]$DumpTree
@@ -125,16 +126,26 @@ if ($ToggleHttps) {
     if (-not $toggled) { throw "https checkbox not found" }
 }
 
-if ($ToggleStartSilently) {
-    $toggleCondition = New-Object System.Windows.Automation.PropertyCondition($AutomationElement::ControlTypeProperty, $ControlType::Button)
-    $toggles = $window.FindAll($TreeScope::Descendants, $toggleCondition)
-    $target = $null
-    foreach ($e in $toggles) {
-        if ($e.Current.Name -eq "静默启动") { $target = $e; break }
+function Toggle-SwitchByName([string]$name) {
+    # ToggleSwitch 在 UIA 里是 Button 类型 + TogglePattern（开关的 AutomationName 就是标题）
+    $buttonCondition = New-Object System.Windows.Automation.PropertyCondition($AutomationElement::ControlTypeProperty, $ControlType::Button)
+    $candidates = $window.FindAll($TreeScope::Descendants, $buttonCondition)
+    foreach ($e in $candidates) {
+        if ($e.Current.Name -eq $name) {
+            $e.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+            Write-Output ("toggled: {0}" -f $name)
+            return
+        }
     }
-    if (-not $target) { throw "silent-start toggle not found" }
-    $target.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-    Write-Output "toggled: 静默启动"
+    throw "toggle not found: $name"
+}
+
+if ($ToggleStartSilently) {
+    Toggle-SwitchByName "静默启动"
+}
+
+if ($ToggleAutoStart) {
+    Toggle-SwitchByName "开机自启"
 }
 
 if ($ClickSave) {

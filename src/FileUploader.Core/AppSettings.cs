@@ -80,6 +80,12 @@ public sealed record AppSettings
     /// </summary>
     public bool StartSilently { get; init; }
 
+    /// <summary>
+    /// 开机自启：登录 Windows 后自动启动本程序（写当前用户的 Run 启动项，不需要管理员）。
+    /// 和 <see cref="StartSilently"/> 相互独立：两个都开才是"开机直接进托盘"。
+    /// </summary>
+    public bool StartWithWindows { get; init; }
+
     /// <summary>去掉协议前缀与结尾斜杠后的 Endpoint。</summary>
     public string NormalizedEndpoint
     {
