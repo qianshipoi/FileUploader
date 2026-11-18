@@ -334,6 +334,7 @@ tools/OssSdkCompare/                与阿里云官方 SDK 对比签名（回归
 tools/capture.ps1                   截图小工具（调试用）
 tools/uia-settings.ps1              设置窗口的 UI 自动化脚本（回归验证用）
 tools/uia-history-search.ps1        历史记录搜索与「下载」保存对话框的 UI 自动化回归
+tools/tray-activate-test.ps1       托盘激活回归：窗口被别的窗口压住时点托盘要能叫到前台
 tools/flash-drop-test.ps1           拖拽浮现气泡回归（位置 / 命中穿透 / 落点注册 / 设置开关 / 拖选文字）
 tools/real-drag-onto-bubble.ps1     真实拖拽验证（资源管理器拖文件到气泡，ESC 取消不上传）
 docs/                               截图
@@ -367,11 +368,13 @@ docs/                               截图
 - 单个文件不打包：`FileUploader.exe a.txt` 直接上传 `a.txt`；两个散文件 → 一个 `打包.zip`（里面 `a.txt` / `b.txt` 在根目录）。
 - 设置页开关用 UIA 实测（`tools/uia-settings.ps1 -ToggleZip`）：切换后 `settings.json` 里的 `ZipBatchUpload` 随之翻转（True → False），关窗口时自动落盘。
 - 顺带修掉一个真实卡顿：拖入 600 个文件的文件夹时，WinRT 逐个 `GetBasicPropertiesAsync` 读大小要 ≈55 秒（拖进去像卡死）；改成有真实路径时走 `System.IO` 快路径后，同一文件夹 2.0 秒就出现「打包中」那一行。
+- 修掉「窗口压在别的窗口下面时，点/双击托盘没反应」：根因是点托盘图标时用户输入是发给 shell 的，系统不认为本进程拿到最后一次输入，`SetForegroundWindow` 被前台锁定规则**静默拒绝**（实测返回 `false`：窗口一动不动，用「临时置顶再取消」也还是 `false`）。现在的做法是 `AttachThreadInput` 挂到当前前台线程 → `BringWindowToTop` → `SetForegroundWindow`（实测 `true`），最小化时先 `SW_RESTORE`；万一还是没拿到前台就写一条 `crash.log`（含两个 hwnd），不再静默失败。
+- 托盘激活的回归脚本 `tools/tray-activate-test.ps1`（`--bring-preview` 触发和点托盘完全相同的那条路径）：记事本当遮挡物 → 断言本程序窗口可见但不是前台 → 触发 → 断言前台变成 `OSS 拖拽上传`。**同一脚本在「注释掉修复」的构建上会 FAIL**（前台仍是记事本），说明它真的抓得住这个 bug。
 - `dotnet build`（Debug/Release）与 `dotnet publish` 均无警告无错误。
 
 ## 排查闪退
 
-程序会把未处理异常写到 `%APPDATA%\FileUploader\crash.log`（含完整堆栈）；简洁模式的原生窗口若创建失败，主窗口也会自动回来，不会留下"窗口没了、托盘也没了"的僵局。
+程序会把未处理异常写到 `%APPDATA%\FileUploader\crash.log`（含完整堆栈）；简洁模式的原生窗口若创建失败，主窗口也会自动回来，不会留下"窗口没了、托盘也没了"的僵局。托盘图标点不回来（前台激活被系统拒绝）时也会在这里留一条记录，便于区分"没触发"和"触发了但没抢到前台"。
 
 ## 发版（GitHub Release，全自动）
 

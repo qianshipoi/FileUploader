@@ -52,6 +52,18 @@ public sealed partial class UploadApp
             AppWindows.ShowTrayMenuForPreview();
         }
 
+        // 开发辅助：--bring-preview 延迟把主窗口叫到前台（和点托盘图标同一条路径），
+        // 方便回归「窗口压在别的窗口下面时能不能被激活」（见 tools/tray-activate-test.ps1）。
+        // FU_BRING_PREVIEW_MS 可以改延迟，给回归脚本留出摆遮挡物的时间。
+        if (Program.BringPreviewOnStartup)
+        {
+            var delay = int.TryParse(Environment.GetEnvironmentVariable("FU_BRING_PREVIEW_MS"), out var ms) && ms > 0
+                ? ms
+                : 5000;
+            await Task.Delay(delay);
+            AppWindows.ShowMainWindowForPreview();
+        }
+
         if (Program.OpenCompactOnStartup)
         {
             AppWindows.EnterCompact();

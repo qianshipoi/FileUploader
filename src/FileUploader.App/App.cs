@@ -20,6 +20,9 @@ public static class Program
     /// <summary>带 <c>--flash-preview</c> 启动时演示一遍「拖拽浮现」气泡（开发回归用）。</summary>
     public static bool FlashPreviewOnStartup { get; private set; }
 
+    /// <summary>带 <c>--bring-preview</c> 启动时延迟 5 秒把主窗口叫到前台（回归托盘激活用）。</summary>
+    public static bool BringPreviewOnStartup { get; private set; }
+
     /// <summary>启动时导入同目录配置的结果说明（给界面提示用）。</summary>
     public static string? ImportNotice { get; private set; }
 
@@ -38,6 +41,7 @@ public static class Program
         OpenSettingsOnStartup = args.Any(a => string.Equals(a.Trim(), "--settings", StringComparison.OrdinalIgnoreCase));
         OpenCompactOnStartup = args.Any(a => string.Equals(a.Trim(), "--compact", StringComparison.OrdinalIgnoreCase));
         FlashPreviewOnStartup = args.Any(a => string.Equals(a.Trim(), "--flash-preview", StringComparison.OrdinalIgnoreCase));
+        BringPreviewOnStartup = args.Any(a => string.Equals(a.Trim(), "--bring-preview", StringComparison.OrdinalIgnoreCase));
 
         // 主窗口默认居中显示（不指定 StartPosition 时是"系统按历史位置决定"，实测会贴在左上角）。
         // CenterOnCurrent = 居中到鼠标所在的那块显示器，多屏下比固定居中到主屏更符合直觉。
