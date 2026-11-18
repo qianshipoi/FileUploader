@@ -68,6 +68,13 @@ public sealed record AppSettings
     public bool AutoCopyUrl { get; init; } = true;
 
     /// <summary>
+    /// 多个文件打包成 ZIP 上传：一次拖入/选中的内容展开后多于一个文件时，
+    /// 先打成一个 zip 再上传（拖动文件夹不再一个文件一条记录）。
+    /// 只有一个文件时照常直传；打包用的临时 zip 传完即删。
+    /// </summary>
+    public bool ZipBatchUpload { get; init; }
+
+    /// <summary>
     /// 屏幕右下角的「拖拽浮现」上传气泡：一开始拖文件就浮起来，拖上去松手即上传。
     /// 关掉后不再创建那个隐形窗口，也不会装拖拽探测器。
     /// </summary>

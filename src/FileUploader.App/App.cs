@@ -7,7 +7,7 @@ namespace FileUploader.App;
 public static class Program
 {
     /// <summary>
-    /// 启动时随命令行传入的文件（把文件拖到 exe 图标 / 快捷方式上时由此进入）。
+    /// 启动时随命令行传入的文件/文件夹（把文件或文件夹拖到 exe 图标 / 快捷方式上时由此进入）。
     /// </summary>
     public static IReadOnlyList<string> StartupFiles { get; private set; } = Array.Empty<string>();
 
@@ -95,7 +95,9 @@ public static class Program
             }
 
             var path = arg.Trim().Trim('"');
-            if (File.Exists(path))
+
+            // 文件夹也接受：把文件夹拖到 exe 图标/快捷方式上传整个目录（内部仍走同一条展开逻辑）。
+            if (File.Exists(path) || Directory.Exists(path))
             {
                 files.Add(path);
             }

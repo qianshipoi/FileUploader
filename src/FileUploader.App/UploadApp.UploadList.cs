@@ -25,7 +25,7 @@ public sealed partial class UploadApp
 
         var succeeded = items.Count(i => i.State == UploadState.Succeeded);
         var finished = items.Count(i => i.IsFinished);
-        var running = items.Count(i => i.State is UploadState.Uploading or UploadState.Queued);
+        var running = items.Count(i => i.IsActive);
 
         var summary = items.Length == 0
             ? searching ? $"0 / {all.Length} 条匹配" : "还没有记录"
@@ -135,26 +135,38 @@ public sealed partial class UploadApp
                         .IsEnabled(!downloadBusy || isDownloading));
 #pragma warning restore REACTOR_A11Y_001
                 break;
+            case UploadState.Packing:
             case UploadState.Uploading:
             case UploadState.Queued:
                 actions.Add(Button("取消", () => UploadQueue.Current.Cancel(item.Id)).SubtleButton());
                 break;
             default:
-                actions.Add(Button("重试", () => UploadQueue.Current.Retry(item)).SubtleButton());
+                // 打包失败/临时 zip 已删的条目没有本地源文件，重试跑不起来，只给「移除」。
+                if (!string.IsNullOrEmpty(item.LocalPath))
+                {
+                    actions.Add(Button("重试", () => UploadQueue.Current.Retry(item)).SubtleButton());
+                }
+
                 break;
         }
 
         actions.Add(
             Button("移除", () => UploadQueue.Current.Remove(item.Id))
                 .SubtleButton()
-                .IsEnabled(item.State is not (UploadState.Uploading or UploadState.Queued)));
+                .IsEnabled(!item.IsActive));
 
-        var meta = item.State == UploadState.Succeeded
-            ? $"{item.SizeText} · 已上传 · {item.StartedAt:MM-dd HH:mm}"
-            : $"{item.SizeText} · {item.StateText}";
+        var meta = item.State switch
+        {
+            UploadState.Succeeded => $"{item.SizeText} · 已上传 · {item.StartedAt:MM-dd HH:mm}",
+            // 打包中/打包阶段就被取消的条目还没有确定的文件大小，别再显示一个 "0 B" 让人以为文件是空的。
+            UploadState.Packing => item.StateText,
+            _ when item.Size <= 0 => item.StateText,
+            _ => $"{item.SizeText} · {item.StateText}",
+        };
 
         Element detail = item.State switch
         {
+            UploadState.Packing => Progress(item.Progress).Height(4).AutomationName($"{item.FileName} 打包进度"),
             UploadState.Uploading or UploadState.Queued => Progress(item.Progress).Height(4).AutomationName($"{item.FileName} 上传进度"),
             UploadState.Failed => TextBlock(item.Error ?? "上传失败")
                 .FontSize(12)

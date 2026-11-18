@@ -56,7 +56,7 @@ public sealed class UploadQueue : INotifyPropertyChanged
     public event Action<string>? Rejected;
 
     /// <summary>是否正在上传。</summary>
-    public bool IsBusy => Items.Any(i => i.State is UploadState.Uploading or UploadState.Queued);
+    public bool IsBusy => Items.Any(i => i.IsActive);
 
     /// <summary>把一批拖入/选中的项目加入队列。</summary>
     public async Task EnqueueAsync(IReadOnlyList<IStorageItem> storageItems)
@@ -83,6 +83,14 @@ public sealed class UploadQueue : INotifyPropertyChanged
         if (dropped.Count == 0)
         {
             Rejected?.Invoke("没有找到可上传的文件。");
+            return;
+        }
+
+        // 「多个文件打包成 ZIP 上传」：展开后多于一个文件就打成一个压缩包再传，
+        // 拖一个文件夹不再刷出一长串记录（单个文件仍直接上传，省一次没必要的压缩）。
+        if (settings.ZipBatchUpload && dropped.Count > 1)
+        {
+            await EnqueueZipAsync(storageItems, dropped, settings).ConfigureAwait(false);
             return;
         }
 
@@ -116,12 +124,125 @@ public sealed class UploadQueue : INotifyPropertyChanged
         }
     }
 
-    /// <summary>取消某个条目（排队中或上传中）。</summary>
+    /// <summary>取消某个条目（打包中、排队中或上传中）。</summary>
     public void Cancel(Guid id)
     {
         if (_cancellations.TryGetValue(id, out var cts))
         {
             cts.Cancel();
+        }
+    }
+
+    /// <summary>
+    /// 把一次拖入的所有文件打成一个 zip，再走同一条上传队列。
+    /// 打包期间列表里就已经有一行（状态「打包中 xx%」），取消/移除会中断打包并删掉临时 zip。
+    /// </summary>
+    private async Task EnqueueZipAsync(
+        IReadOnlyList<IStorageItem> storageItems,
+        IReadOnlyList<DroppedFile> dropped,
+        AppSettings settings)
+    {
+        var now = DateTimeOffset.Now;
+        var fileName = ZipPackager.ChooseFileName(storageItems.OfType<StorageFolder>().Select(f => f.Name));
+        var item = new UploadItem(
+            Guid.NewGuid(),
+            fileName,
+            string.Empty,
+            0,
+            ObjectKey.Build(settings, fileName, null, now),
+            UploadState.Packing,
+            0,
+            null,
+            null,
+            now,
+            IsTemporary: true);
+
+        lock (_gate)
+        {
+            _items = _items.Add(item);
+        }
+
+        RaiseChanged();
+
+        var entries = dropped
+            .Select(f => new ZipEntry(
+                f.LocalPath,
+                ZipPackager.CombineEntryName(f.RootName, f.RelativeDirectory, f.FileName)))
+            .ToArray();
+
+        var cancellation = new CancellationTokenSource();
+        _cancellations[item.Id] = cancellation;
+        var packing = true;
+        UploadItem? ready = null;
+        try
+        {
+            // 临时文件放 %TEMP%\FileUploader：打包产物只是中间的，成功/失败/取消都会删掉。
+            var zipPath = Path.Combine(Path.GetTempPath(), "FileUploader", item.Id.ToString("N") + ".zip");
+            var progress = new Progress<int>(done =>
+            {
+                if (!packing)
+                {
+                    return;
+                }
+
+                UpdateItem(item.Id, i => i with { Progress = Math.Min(100, done * 100d / Math.Max(1, entries.Length)) });
+            });
+
+            var result = await ZipPackager.CreateAsync(zipPath, entries, progress, cancellation.Token).ConfigureAwait(false);
+            packing = false;
+
+            if (!result.Success)
+            {
+                UpdateItem(item.Id, i => i with { State = UploadState.Failed, Error = $"打包失败：{result.Error}" });
+                Rejected?.Invoke($"打包失败：{result.Error}");
+                return;
+            }
+
+            if (result.Skipped > 0)
+            {
+                Rejected?.Invoke($"{result.Skipped} 个文件读不到（可能被移动或没权限），已从压缩包里跳过。");
+            }
+
+            // 只有条目还在「打包中」才转成待上传：否则说明打包这几秒里用户已经取消/移除了它，
+            // 这时压缩包没人要，直接删掉（不删就会漏在临时目录里）。
+            // 注意：这里不能用 return 跳出 —— try 里 return 会连 finally 后面的 StartUpload 一起跳过，
+            // 行会卡在「等待上传」不动（踩过）。
+            var updated = UpdateItem(item.Id, i => i.State == UploadState.Packing
+                ? i with { LocalPath = zipPath, Size = result.Bytes, State = UploadState.Queued, Progress = 0 }
+                : i);
+
+            if (updated is { State: UploadState.Queued })
+            {
+                ready = updated;
+            }
+            else
+            {
+                DeleteQuietly(zipPath);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            packing = false;
+            UpdateItem(item.Id, i => i with { State = UploadState.Canceled, Progress = 0, Error = null });
+        }
+        catch (Exception ex)
+        {
+            packing = false;
+            UpdateItem(item.Id, i => i with { State = UploadState.Failed, Error = $"打包失败：{ex.Message}" });
+            Rejected?.Invoke($"打包失败：{ex.Message}");
+        }
+        finally
+        {
+            packing = false;
+            _cancellations.TryRemove(item.Id, out _);
+            cancellation.Dispose();
+        }
+
+        // 打包用的 CancellationTokenSource 已经摘掉了，这里再交给上传流程自己管；
+        // 放在 finally 之后是为了不让上面那句 TryRemove 把上传的令牌一起摘掉。
+        if (ready is not null)
+        {
+            StartUpload(ready, settings);
         }
     }
 
@@ -135,12 +256,19 @@ public sealed class UploadQueue : INotifyPropertyChanged
             return;
         }
 
+        // 合并成功但本地临时 zip 已经删掉的（或打包本身失败的）没法重试，只能重新拖一次。
+        if (string.IsNullOrEmpty(item.LocalPath))
+        {
+            Rejected?.Invoke($"{item.FileName} 没法重试：本地文件已经不在，请重新拖一次。");
+            return;
+        }
+
         var reset = item with { State = UploadState.Queued, Progress = 0, Error = null };
         UpdateItem(item.Id, _ => reset);
         StartUpload(reset, current);
     }
 
-    /// <summary>从列表移除（同时删掉历史里的记录）。</summary>
+    /// <summary>从列表移除（同时删掉历史里的记录与临时文件）。</summary>
     public void Remove(Guid id)
     {
         Cancel(id);
@@ -157,6 +285,11 @@ public sealed class UploadQueue : INotifyPropertyChanged
         if (removed?.Url is { Length: > 0 } url)
         {
             HistoryStore.Remove(url);
+        }
+
+        if (removed is { IsTemporary: true, LocalPath.Length: > 0 })
+        {
+            DeleteQuietly(removed.LocalPath);
         }
     }
 
@@ -347,6 +480,27 @@ public sealed class UploadQueue : INotifyPropertyChanged
             _cancellations.TryRemove(item.Id, out _);
             cts.Dispose();
             _uploadGate.Release();
+
+            // 合并上传的临时 zip：传完（成功或失败）就删，别在临时目录里堆着。
+            if (item.IsTemporary)
+            {
+                DeleteQuietly(item.LocalPath);
+            }
+        }
+    }
+
+    private static void DeleteQuietly(string path)
+    {
+        try
+        {
+            if (!string.IsNullOrEmpty(path) && File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 删不掉就留在 %TEMP%\FileUploader 里，系统清理时会被带走。
         }
     }
 

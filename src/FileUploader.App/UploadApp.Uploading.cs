@@ -98,7 +98,7 @@ public sealed partial class UploadApp
         }
     }
 
-    /// <summary>把命令行传入的文件读成 StorageFile 后走同一条上传队列。</summary>
+    /// <summary>把命令行传入的文件 / 文件夹读成 StorageItem 后走同一条上传队列。</summary>
     private async Task UploadStartupFilesAsync()
     {
         var paths = Program.StartupFiles;
@@ -112,7 +112,10 @@ public sealed partial class UploadApp
         {
             try
             {
-                items.Add(await StorageFile.GetFileFromPathAsync(path));
+                // 文件夹直接当 StorageFolder 交给队列：展开、打包成 zip 都走和拖拽一样的路径。
+                items.Add(Directory.Exists(path)
+                    ? await StorageFolder.GetFolderFromPathAsync(path)
+                    : await StorageFile.GetFileFromPathAsync(path));
             }
             catch (Exception ex)
             {

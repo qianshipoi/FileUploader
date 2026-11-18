@@ -154,6 +154,7 @@ public static class SettingsExchange
         SignedUrlExpireDays = settings.SignedUrlExpireDays,
         PublicReadObject = settings.PublicReadObject,
         AutoCopyUrl = settings.AutoCopyUrl,
+        ZipBatchUpload = settings.ZipBatchUpload,
         FlashDropEnabled = settings.FlashDropEnabled,
         StartSilently = settings.StartSilently,
         StartWithWindows = settings.StartWithWindows,
@@ -195,6 +196,9 @@ public static class SettingsExchange
 
         public bool AutoCopyUrl { get; set; } = true;
 
+        /// <summary>多个文件打包成 ZIP 上传（旧导出文件里没有这个字段时按关闭处理）。</summary>
+        public bool ZipBatchUpload { get; set; }
+
         /// <summary>右下角拖拽浮现上传气泡（旧导出文件没有这个字段时按开启处理）。</summary>
         public bool FlashDropEnabled { get; set; } = true;
 
@@ -221,6 +225,7 @@ public static class SettingsExchange
             SignedUrlExpireDays = SignedUrlExpireDays <= 0 ? 7 : SignedUrlExpireDays,
             PublicReadObject = PublicReadObject,
             AutoCopyUrl = AutoCopyUrl,
+            ZipBatchUpload = ZipBatchUpload,
             FlashDropEnabled = FlashDropEnabled,
             StartSilently = StartSilently,
             StartWithWindows = StartWithWindows,

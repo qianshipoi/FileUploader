@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -50,8 +51,11 @@ switch (mode)
     case "download":
         await RunDownloadAsync();
         break;
+    case "zip":
+        await RunZipChecksAsync();
+        break;
     default:
-        Console.WriteLine("用法: FileUploader.Verify [vectors|exchange|presign|download|upload|live-oss|settings|delete-object]");
+        Console.WriteLine("用法: FileUploader.Verify [vectors|exchange|presign|download|zip|upload|live-oss|settings|delete-object]");
         return 2;
 }
 
@@ -178,6 +182,7 @@ void RunVectors()
             FlashDropEnabled = false,
             StartSilently = true,
             StartWithWindows = true,
+            ZipBatchUpload = true,
         };
 
         SettingsStore.SaveTo(file, original);
@@ -498,7 +503,7 @@ async Task RunDownloadAsync()
     {
         var destination = Path.Combine(dir, "out.txt");
         long reported = 0;
-        var ok = await ObjectDownloader.DownloadAsync(prefix + "/ok", destination, new InlineProgress(bytes => reported = bytes), CancellationToken.None);
+        var ok = await ObjectDownloader.DownloadAsync(prefix + "/ok", destination, new InlineProgress<long>(bytes => reported = bytes), CancellationToken.None);
         Check("下载成功", ok.Success ? "ok" : ok.Error ?? "fail", "ok");
         Check("下载内容一致", Encoding.UTF8.GetString(await File.ReadAllBytesAsync(destination)), Encoding.UTF8.GetString(payload));
         Check("下载字节数", ok.Bytes.ToString(), payload.Length.ToString());
@@ -569,6 +574,92 @@ async Task<string> ReadRequestLineAsync(NetworkStream stream)
     return text.Split("\r\n")[0];
 }
 
+/// <summary>
+/// 「多个文件打包成 ZIP 上传」的离线回归：真实文件 → 真 zip → 逐条读回来比对。
+/// 覆盖压缩包内路径、跳过读不到的文件、已压缩格式走 stored、取消与全失败不留半成品。
+/// </summary>
+async Task RunZipChecksAsync()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "fu-zip-" + Guid.NewGuid().ToString("N"));
+    var source = Path.Combine(dir, "src");
+    Directory.CreateDirectory(Path.Combine(source, "sub"));
+    try
+    {
+        await File.WriteAllTextAsync(Path.Combine(source, "a.txt"), "AAA 中文", new UTF8Encoding(false));
+        await File.WriteAllTextAsync(Path.Combine(source, "sub", "b.txt"), "BBB", new UTF8Encoding(false));
+
+        // 已经是压缩格式的扩展名：应当 stored（压缩前后等长），避免白烧 CPU。
+        var jpgPath = Path.Combine(source, "c.jpg");
+        await File.WriteAllBytesAsync(jpgPath, Enumerable.Repeat((byte)'x', 8192).ToArray());
+
+        var entries = new[]
+        {
+            new ZipEntry(Path.Combine(source, "a.txt"), ZipPackager.CombineEntryName("A", null, "a.txt")),
+            new ZipEntry(Path.Combine(source, "sub", "b.txt"), ZipPackager.CombineEntryName("A", "sub", "b.txt")),
+            new ZipEntry(jpgPath, ZipPackager.CombineEntryName("A", null, "c.jpg")),
+            new ZipEntry(Path.Combine(source, "missing.txt"), ZipPackager.CombineEntryName("A", null, "missing.txt")),
+        };
+
+        var zipPath = Path.Combine(dir, "A.zip");
+        var reports = new List<int>();
+        var result = await ZipPackager.CreateAsync(zipPath, entries, new InlineProgress<int>(reports.Add), CancellationToken.None);
+        Check("打包成功", result.Success ? "ok" : result.Error ?? "fail", "ok");
+        Check("打包跳过读不到的文件", result.Skipped.ToString(), "1");
+        Check("打包条目数", result.Entries.ToString(), "3");
+        Check("进度逐个上报", string.Join(",", reports), "1,2,3");
+        Check("结果字节数与文件一致", result.Bytes.ToString(), new FileInfo(zipPath).Length.ToString());
+
+        using (var archive = ZipFile.OpenRead(zipPath))
+        {
+            Check(
+                "压缩包内路径",
+                string.Join("|", archive.Entries.Select(e => e.FullName).OrderBy(x => x, StringComparer.Ordinal)),
+                "A/a.txt|A/c.jpg|A/sub/b.txt");
+
+            using var reader = new StreamReader(archive.GetEntry("A/sub/b.txt")!.Open(), Encoding.UTF8);
+            Check("压缩包内内容一致", await reader.ReadToEndAsync(), "BBB");
+
+            var jpg = archive.GetEntry("A/c.jpg")!;
+            Check("已压缩格式走 stored", (jpg.CompressedLength == jpg.Length).ToString(), "True");
+        }
+
+        Check("zip 名（有文件夹）", ZipPackager.ChooseFileName(new[] { "照片", null }), "照片.zip");
+        Check("zip 名（没有文件夹）", ZipPackager.ChooseFileName(new[] { (string?)null }), "打包.zip");
+        Check("zip 名（已带 .zip 不重复）", ZipPackager.ChooseFileName(new[] { "备份.zip" }), "备份.zip");
+
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        var canceledPath = Path.Combine(dir, "canceled.zip");
+        try
+        {
+            await ZipPackager.CreateAsync(canceledPath, entries, null, canceled.Token);
+            Check("打包取消抛 OperationCanceledException", "no throw", "throw");
+        }
+        catch (OperationCanceledException)
+        {
+            Check("打包取消抛 OperationCanceledException", "throw", "throw");
+        }
+
+        Check("取消后不留半成品", File.Exists(canceledPath) ? "left" : "clean", "clean");
+
+        var nothingPath = Path.Combine(dir, "nothing.zip");
+        var nothing = await ZipPackager.CreateAsync(
+            nothingPath,
+            new[] { new ZipEntry(Path.Combine(dir, "nope.txt"), "nope.txt") },
+            null,
+            CancellationToken.None);
+        Check("所有文件都读不到时失败", nothing.Success ? "ok" : "failed", "failed");
+        Check("失败不留文件", File.Exists(nothingPath) ? "left" : "clean", "clean");
+    }
+    finally
+    {
+        if (Directory.Exists(dir))
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+}
+
 void WriteSettingsFile(string? targetPath = null)
 {
     var settings = new AppSettings
@@ -616,7 +707,7 @@ string? ReadEnv(string name)
 /// 同步执行的 <see cref="IProgress{T}"/>：<see cref="Progress{T}"/> 会把回调投递到线程池，
 /// 断言时可能还没跑到，所以测试里要就地执行。
 /// </summary>
-sealed class InlineProgress(Action<long> report) : IProgress<long>
+sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
 {
-    public void Report(long value) => report(value);
+    public void Report(T value) => report(value);
 }

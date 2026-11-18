@@ -7,6 +7,7 @@ param(
     [switch]$ToggleHttps,
     [switch]$ToggleStartSilently,
     [switch]$ToggleAutoStart,
+    [switch]$ToggleZip,
     [switch]$ClickSave,
     [switch]$ClickClose,
     [switch]$DumpTree
@@ -146,6 +147,21 @@ if ($ToggleStartSilently) {
 
 if ($ToggleAutoStart) {
     Toggle-SwitchByName "开机自启"
+}
+
+if ($ToggleZip) {
+    # 「多个文件打包成 ZIP 上传」是 CheckBox（不是开关）：UIA 里是 ControlType.CheckBox + TogglePattern。
+    $checkCondition = New-Object System.Windows.Automation.PropertyCondition($AutomationElement::ControlTypeProperty, $ControlType::CheckBox)
+    $found = $false
+    foreach ($e in $window.FindAll($TreeScope::Descendants, $checkCondition)) {
+        if ($e.Current.Name -like "*打包成 ZIP*") {
+            $e.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+            Write-Output ("toggled: {0}" -f $e.Current.Name)
+            $found = $true
+            break
+        }
+    }
+    if (-not $found) { throw "zip checkbox not found" }
 }
 
 if ($ClickSave) {

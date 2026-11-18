@@ -204,6 +204,16 @@ public sealed class SettingsWindow : Component
                 Pair(
                     CheckBox((bool?)_settings.AutoCopyUrl, value => SetField(s => s with { AutoCopyUrl = value }), "上传成功后自动复制链接"),
                     CheckBox((bool?)_settings.UseDateFolder, value => SetField(s => s with { UseDateFolder = value }), "对象键按日期分组（yyyy/MM/dd）")),
+                CheckBox(
+                    (bool?)_settings.ZipBatchUpload,
+                    value => SetField(s => s with { ZipBatchUpload = value }),
+                    "多个文件打包成 ZIP 上传"),
+                // 说明一直在：开关关着的时候更需要知道它到底做什么，不能只在打开后才解释。
+                TextBlock("一次拖入的内容展开后多于一个文件时，先打成一个 zip 再上传（压缩包名字取第一个文件夹名，" +
+                          "没有文件夹时叫「打包.zip」）。只有一个文件时仍直接上传；临时 zip 传完自动删除。")
+                    .FontSize(11)
+                    .Foreground(Theme.TertiaryText)
+                    .TextWrapping(),
                 _settings.UrlMode == UrlMode.Direct
                     ? CheckBox((bool?)_settings.PublicReadObject, value => SetField(s => s with { PublicReadObject = value }), "上传时把对象设为公共读（直链需要）")
                     : Empty()));

@@ -120,6 +120,9 @@ public static class SettingsStore
 
         public bool AutoCopyUrl { get; set; } = true;
 
+        /// <summary>多个文件打包成 ZIP 上传（旧配置文件里没有这个字段时按关闭处理）。</summary>
+        public bool ZipBatchUpload { get; set; }
+
         /// <summary>右下角拖拽浮现上传气泡（旧配置文件里没有这个字段时按开启处理）。</summary>
         public bool FlashDropEnabled { get; set; } = true;
 
@@ -146,6 +149,7 @@ public static class SettingsStore
             SignedUrlExpireDays = s.SignedUrlExpireDays,
             PublicReadObject = s.PublicReadObject,
             AutoCopyUrl = s.AutoCopyUrl,
+            ZipBatchUpload = s.ZipBatchUpload,
             FlashDropEnabled = s.FlashDropEnabled,
             StartSilently = s.StartSilently,
             StartWithWindows = s.StartWithWindows,
@@ -168,6 +172,7 @@ public static class SettingsStore
             SignedUrlExpireDays = SignedUrlExpireDays <= 0 ? 7 : SignedUrlExpireDays,
             PublicReadObject = PublicReadObject,
             AutoCopyUrl = AutoCopyUrl,
+            ZipBatchUpload = ZipBatchUpload,
             FlashDropEnabled = FlashDropEnabled,
             StartSilently = StartSilently,
             StartWithWindows = StartWithWindows,
