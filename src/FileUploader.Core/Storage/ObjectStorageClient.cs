@@ -37,15 +37,6 @@ public sealed class ObjectStorageClient
         "<(Code|Message)>(.*?)</\\1>",
         RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    private static readonly HttpClient Http = new(new SocketsHttpHandler
-    {
-        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-        AutomaticDecompression = DecompressionMethods.All,
-    })
-    {
-        Timeout = TimeSpan.FromMinutes(30),
-    };
-
     private readonly AppSettings _settings;
 
     public ObjectStorageClient(AppSettings settings)
@@ -112,7 +103,7 @@ public sealed class ObjectStorageClient
 
         try
         {
-            using var response = await Http
+            using var response = await StorageHttp.Client
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -143,7 +134,7 @@ public sealed class ObjectStorageClient
 
         try
         {
-            using var response = await Http
+            using var response = await StorageHttp.Client
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -173,7 +164,7 @@ public sealed class ObjectStorageClient
 
         try
         {
-            using var response = await Http
+            using var response = await StorageHttp.Client
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -208,7 +199,7 @@ public sealed class ObjectStorageClient
 
         try
         {
-            using var response = await Http
+            using var response = await StorageHttp.Client
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
 

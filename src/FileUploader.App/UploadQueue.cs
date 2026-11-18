@@ -28,14 +28,17 @@ public sealed class UploadQueue : INotifyPropertyChanged
     /// <summary>进程内唯一实例。</summary>
     public static UploadQueue Current { get; } = new();
 
-    /// <summary>当前的上传/历史条目（不可变快照）。</summary>
+    /// <summary>当前的上传/历史条目（不可变快照，按时间倒序：最新的在最前面）。</summary>
     public ImmutableArray<UploadItem> Items
     {
         get
         {
             lock (_gate)
             {
-                return _items;
+                // 历史是从新到旧读进来的，新上传的却是追加在尾部 ——
+                // 不在这里统一排序，新记录就会跑到历史下面去（"刚传完的文件找不到"）。
+                // OrderByDescending 是稳定排序：同一批一起入队的文件保持原顺序。
+                return _items.OrderByDescending(i => i.StartedAt).ToImmutableArray();
             }
         }
     }
@@ -190,6 +193,12 @@ public sealed class UploadQueue : INotifyPropertyChanged
         return string.IsNullOrEmpty(item.Url) ? null : item.Url;
     }
 
+    /// <summary>
+    /// 程序内下载用的地址：有密钥就现签一个（私有桶 / 已过期都能下），没密钥时退回历史里的旧链接。
+    /// </summary>
+    public string? ResolveDownloadUrl(UploadItem item) =>
+        ObjectUrlBuilder.DownloadUrl(SettingsState.Current.Value, item.Key, item.Url, DateTimeOffset.Now);
+
     /// <summary>重新生成链接并写入剪贴板（供「复制链接」使用）。</summary>
     public bool CopyLink(UploadItem item)
     {
@@ -208,10 +217,10 @@ public sealed class UploadQueue : INotifyPropertyChanged
         return true;
     }
 
-    /// <summary>复制所有成功条目的链接。</summary>
-    public int CopyAllLinks()
+    /// <summary>复制给定条目里成功那些的链接（主窗口会传筛选后的集合，「全部」按钮也用这个）。</summary>
+    public int CopyLinks(IEnumerable<UploadItem> items)
     {
-        var urls = Items
+        var urls = items
             .Where(i => i.State == UploadState.Succeeded)
             .Select(ResolveUrl)
             .Where(u => !string.IsNullOrEmpty(u))

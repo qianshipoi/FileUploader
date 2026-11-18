@@ -20,7 +20,7 @@
 ## 功能
 
 - **拖拽即上传**：支持一次拖入多个文件；拖入文件夹会递归展开（最多 2000 个文件）。整块区域也是点击热区，点一下弹系统文件对话框，同样支持多选。
-- **上传历史持久化**：成功的记录写进 `history.json`，重启后仍在，随时回来复制链接；支持「复制全部链接」「移除」「清空记录」。
+- **上传历史持久化**：成功的记录写进 `history.json`，重启后仍在，随时回来复制链接；列表按时间**倒序**（最新的在最上面），可按**文件名搜索**，也能直接点「下载」把对象存回本地（系统另存为对话框，默认原名 + 「下载」文件夹）；另有「复制全部链接」「移除」「清空记录」。
 - **独立设置窗口**：改动立即生效、自动保存（400ms 防抖），底部还有「保存」按钮和「已保存 HH:mm:ss / 有未保存的更改…」状态提示；主窗口实时同步。设置页按「存储服务 → 上传与链接 → 启动与托盘」分成三张卡片，相关字段两列并排，常用项不再折叠进「高级设置」。
 - **两个窗口共享一份配置**（单例状态 + 变更通知），不会出现"设置窗口里改了、主窗口还说不认识"的情况；关窗口时强制落盘。
 - **两种签名协议**：阿里云 OSS 原生 V1 签名、AWS SigV4（MinIO / RustFS / 其他 S3 网关）。
@@ -180,7 +180,7 @@ FileUploader.exe --flash-preview   # 开发用：依次演示 提示 → 可投�
    - **桶名（Bucket）**、**AccessKey ID**、**AccessKey Secret**。
 2. 点「测试连接」验证（桶不存在会自动创建）。
 3. 回到主窗口，把文件拖到虚线区域，或者直接点一下这块区域（整块都能点，不用找按钮）。
-4. 每行上传完成后会显示链接，默认自动复制到剪贴板；历史里随时可以再复制。
+4. 每行上传完成后会显示链接，默认自动复制到剪贴板；历史里随时可以再复制，也可以直接「下载」把文件存回本地。
 
 ### 设置项
 
@@ -231,6 +231,14 @@ FileUploader.exe --flash-preview   # 开发用：依次演示 提示 → 可投�
 
 （`oss:PutBucket` 只在自动建桶时需要。）
 
+## 上传历史（搜索与下载）
+
+主窗口下半部分是历史列表，按**时间倒序**排（最近上传的在最上面），最多保留 200 条。
+
+- **按文件名搜索**：列表上方的搜索框边输入边过滤，不区分大小写，只匹配文件名（不匹配对象键里的日期目录与前缀）。标题旁会显示 `命中 / 总数`，右侧的「复制全部链接」只复制**当前筛选出来的**那些；搜索时「清空记录」会禁用，避免把看不见的记录一起删掉。点「清除」或搜索框里的 × 回到全部记录。
+- **下载**：每行一个「下载」按钮 → 系统「另存为」对话框（默认文件名取原始文件名，默认位置是「下载」文件夹）→ 流式写入你选的位置，按钮上显示百分比、行内显示进度条，完成后提示保存路径。下载走的链接是**用当前配置现签**的（见 `ObjectUrlBuilder.DownloadUrl`），所以私有桶、历史里存的旧签名过期了都照样能下；下载失败（403 过期 / 404 对象已被删）会删掉对话框建出来的空文件并给出原因。
+- 一次只下载一个：进度条只有一个位置显示，所以下载期间其它行的「下载」按钮会暂时禁用。
+
 ## 数据文件
 
 | 文件 | 内容 |
@@ -275,15 +283,17 @@ src/FileUploader.Core/              与 UI 无关的存储层
   SettingsStore.cs                  settings.json 读写（密钥 DPAPI 加密）
   HistoryStore.cs                   history.json（最近 200 条）
   ObjectKey.cs                      对象键构造 + RFC 3986 编码
-  Storage/ObjectUrlBuilder.cs       直链 / 预签名链接（OSS V1、SigV4）
+  Storage/ObjectUrlBuilder.cs       直链 / 预签名链接（OSS V1、SigV4）+ 下载用地址
   ContentTypes.cs                   扩展名 → Content-Type
   Storage/Signers.cs                OSS V1 / SigV4 签名
   Storage/ObjectStorageClient.cs    PUT Object、HEAD/PUT Bucket、进度上报、错误解析
+  Storage/ObjectDownloader.cs       GET 流式下载到本地文件（进度 / 临时文件 / 错误说明）
+  Storage/StorageHttp.cs            上传与下载共用的 HttpClient
 src/FileUploader.App/               WinUI 3 + Reactor 界面
   App.cs                            入口（文件参数、--settings）
   UploadApp.cs                      主窗口：头部、提示条、布局、跨窗口状态订阅
   UploadApp.DropZone.cs             拖拽区域（整块点击选题 + DragEnter/Over/Leave/Drop）
-  UploadApp.UploadList.cs           上传历史列表（复制 / 重试 / 移除 / 清空）
+  UploadApp.UploadList.cs           上传历史列表（文件名搜索 / 下载 / 复制 / 重试 / 移除 / 清空）
   NativeBubbleWindow.cs             简洁模式：分层窗口 + GDI+ 绘制的圆形气泡
   FlashDropWindow.cs                拖拽浮现：隐形分层窗口 + 落点 + 淡入淡出状态机
   DropTargetInterop.cs              IDropTarget / CF_HDROP 互操作（拖放数据里取文件路径）
@@ -297,10 +307,11 @@ src/FileUploader.App/               WinUI 3 + Reactor 界面
   SettingsState.cs                  跨窗口共享配置（INotifyPropertyChanged + 防抖落盘）
   DropExpander.cs                   拖入项 → 文件列表（文件夹递归）
   UploadModels.cs                   上传条目 / 提示条模型
-tools/FileUploader.Verify/          签名 / 上传 / 预签名链接自测
+tools/FileUploader.Verify/          签名 / 上传 / 预签名链接 / 下载自测
 tools/OssSdkCompare/                与阿里云官方 SDK 对比签名（回归用）
 tools/capture.ps1                   截图小工具（调试用）
 tools/uia-settings.ps1              设置窗口的 UI 自动化脚本（回归验证用）
+tools/uia-history-search.ps1        历史记录搜索与「下载」保存对话框的 UI 自动化回归
 tools/flash-drop-test.ps1           拖拽浮现气泡回归（位置 / 命中穿透 / 落点注册 / 设置开关 / 拖选文字）
 tools/real-drag-onto-bubble.ps1     真实拖拽验证（资源管理器拖文件到气泡，ESC 取消不上传）
 docs/                               截图
@@ -323,6 +334,10 @@ docs/                               截图
 - 新设置页布局用 UI 自动化验证过（`tools/uia-settings.ps1`，窗口标题改为「设置」）：Endpoint / 桶名 / AccessKey ID 按标题找到、协议下拉、HTTPS 与「静默启动」开关都能点，保存后 `settings.json` 里 `StartSilently` 为 `true`。
 - 「静默启动」四种启动路径实测（便携模式，不碰真实配置）：开着 + 已配置 → 主窗口 `IsWindowVisible=False` 且进程存活；关掉 → 主窗口可见；开着但没配置 → 主窗口可见；开着且命令行带文件 → 主窗口可见。20ms 采样下窗口可见仅 1 帧（≈20ms），没有明显闪烁。
 - 「开机自启」实测（便携副本，测完已删掉启动项）：UIA 打开开关 → `HKCU\...\Run` 出现 `FileUploader`，值是带引号的 exe 全路径且配置同步为 `true`；再点一下 → 启动项消失、配置回到 `false`；把启动项改指一条旧路径后重启 → 按当前 exe 重写、配置保持 `true`；直接把启动项删掉后重启 → 配置同步成 `false` 且不会偷偷加回来；其余 7 个用户启动项全程未被动过。
+- 历史列表**倒序 + 按文件名搜索**用 UI 自动化实测（`tools/uia-history-search.ps1`，便携副本里放 4 条记录）：关键字「报告」只剩 1 行；`SCREEN` 这种大写关键字也能命中 `screenshot-settings.png`（不区分大小写）；无匹配时显示「0 / 4 条匹配」且一行都不留；点「清除」后搜索框清空、4 行全部回来。
+- 「下载」端到端实测（便携副本 + 本机 HTTP 服务冒充对象存储，不碰真实桶）：点「下载」→ 系统「另存为」对话框弹出（文件名已填原名、位置在「下载」、类型 `原文件类型 (*.txt)`）→ 确认后文件落到 `Downloads\local-download.txt`，大小 37 B 与内容（含中文）逐字节一致，提示条显示保存路径；点「取消」则窗口关闭且不产生任何文件。
+- `ObjectDownloader` 离线回归（`FileUploader.Verify download`，本机 TcpListener 冒充存储）：200 内容逐字节一致、进度回调到最终字节数、临时 `.part` 不残留；403/404 给出可读原因且不落文件；无效链接直接失败；取消抛 `OperationCanceledException`。
+- 下载地址选择（`FileUploader.Verify presign`）：配置齐全时一律现签（直链模式也一样，私有桶才下得动），未配置时退回历史里的旧链接，两者都没有时返回空（界面提示先去配置）。
 - `dotnet build`（Debug/Release）与 `dotnet publish` 均无警告无错误。
 
 ## 排查闪退

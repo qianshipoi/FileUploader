@@ -96,6 +96,7 @@ dotnet run --project tools\FileUploader.Verify -c Release
 | 脚本 | 覆盖内容 |
 |---|---|
 | `uia-settings.ps1` | 设置窗口编辑链路（UI Automation，不依赖鼠标） |
+| `uia-history-search.ps1` | 历史记录：按文件名搜索 / 清除搜索 / 「下载」弹出的保存对话框（不依赖鼠标） |
 | `uia-tray-menu.ps1` | 托盘菜单结构与点击 |
 | `uia-header-gear.ps1` / `uia-click.ps1` / `uia-pick.ps1` / `uia-invoke-test.ps1` | 主窗口控件交互 |
 | `compact-race-test.ps1` | 简洁模式快速进出、气泡与主窗口竞态 |

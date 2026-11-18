@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using FileUploader.Core;
 using FileUploader.Core.Storage;
@@ -45,8 +47,11 @@ switch (mode)
         RunPresignVectors();
         await RunPresignLiveAsync();
         break;
+    case "download":
+        await RunDownloadAsync();
+        break;
     default:
-        Console.WriteLine("用法: FileUploader.Verify [vectors|upload|live-oss]");
+        Console.WriteLine("用法: FileUploader.Verify [vectors|exchange|presign|download|upload|live-oss|settings|delete-object]");
         return 2;
 }
 
@@ -354,6 +359,15 @@ void RunPresignVectors()
     // 直链模式仍用自定义域名
     var direct = oss with { UrlMode = UrlMode.Direct, PublicBaseUrl = "https://cdn.example.com" };
     Check("直链 URL（自定义域名）", ObjectUrlBuilder.Build(direct, "images/a.png", DateTimeOffset.UtcNow), "https://cdn.example.com/images/a.png");
+
+    // 程序内下载用的地址：只要还握着密钥就现签一个链接，与「链接类型」无关 ——
+    // 直链模式下桶可能是私有的，拿旧直链去 GET 会 403。
+    var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    Check("下载地址（签名模式=现签）", ObjectUrlBuilder.DownloadUrl(oss, "images/a.png", "https://stale.example.com/x.png", now)!, ObjectUrlBuilder.SignedUrl(oss, "images/a.png", now));
+    Check("下载地址（直链模式也现签）", ObjectUrlBuilder.DownloadUrl(direct, "images/a.png", "https://cdn.example.com/images/a.png", now)!, ObjectUrlBuilder.SignedUrl(direct, "images/a.png", now));
+    var unconfigured = oss with { AccessKeyId = string.Empty };
+    Check("下载地址（未配置退回旧链接）", ObjectUrlBuilder.DownloadUrl(unconfigured, "images/a.png", "https://stale.example.com/x.png", now)!, "https://stale.example.com/x.png");
+    Check("下载地址（未配置且无旧链接）", ObjectUrlBuilder.DownloadUrl(unconfigured, "images/a.png", null, now) ?? "<null>", "<null>");
 }
 
 async Task RunPresignLiveAsync()
@@ -418,6 +432,143 @@ async Task RunPresignLiveAsync()
     var expiredResponse = await http.GetAsync(expiredUrl, cts.Token);
     Check("过期签名链接被拒绝（403）", ((int)expiredResponse.StatusCode).ToString(), "403");
 }
+/// <summary>
+/// 程序内下载的离线回归：用本机 TcpListener 假装对象存储，验证
+/// 「字节落盘 / 进度回调 / 临时文件清理 / 403·404 的说明 / 取消」。
+/// 不连真实存储，所以不会碰到用户桶里的数据。
+/// </summary>
+async Task RunDownloadAsync()
+{
+    var payload = Encoding.UTF8.GetBytes("hello download " + Guid.NewGuid().ToString("N") + " 中文内容");
+    using var listener = new TcpListener(IPAddress.Loopback, 0);
+    listener.Start();
+    var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+    var prefix = $"http://127.0.0.1:{port}";
+    using var stop = new CancellationTokenSource();
+
+    var server = Task.Run(async () =>
+    {
+        while (!stop.IsCancellationRequested)
+        {
+            TcpClient client;
+            try
+            {
+                client = await listener.AcceptTcpClientAsync(stop.Token);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                using (client)
+                {
+                    var stream = client.GetStream();
+                    var requestLine = await ReadRequestLineAsync(stream);
+                    var path = requestLine.Split(' ').Skip(1).FirstOrDefault() ?? "/";
+                    var (status, reason, body) = path switch
+                    {
+                        "/ok" => (200, "OK", payload),
+                        "/forbidden" => (403, "Forbidden", Array.Empty<byte>()),
+                        _ => (404, "Not Found", Array.Empty<byte>()),
+                    };
+
+                    var head = $"HTTP/1.1 {status} {reason}\r\nContent-Length: {body.Length}\r\n" +
+                               "Content-Type: application/octet-stream\r\nConnection: close\r\n\r\n";
+                    await stream.WriteAsync(Encoding.ASCII.GetBytes(head));
+                    if (body.Length > 0)
+                    {
+                        await stream.WriteAsync(body);
+                    }
+
+                    await stream.FlushAsync();
+
+                    // 发完就半关：直接 Dispose 会在对端还有未读数据时发 RST，HttpClient 会报
+                    // "远程主机强迫关闭了一个现有的连接"。
+                    client.Client.Shutdown(SocketShutdown.Send);
+                }
+            });
+        }
+    });
+
+    var dir = Path.Combine(Path.GetTempPath(), "fu-download-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    try
+    {
+        var destination = Path.Combine(dir, "out.txt");
+        long reported = 0;
+        var ok = await ObjectDownloader.DownloadAsync(prefix + "/ok", destination, new InlineProgress(bytes => reported = bytes), CancellationToken.None);
+        Check("下载成功", ok.Success ? "ok" : ok.Error ?? "fail", "ok");
+        Check("下载内容一致", Encoding.UTF8.GetString(await File.ReadAllBytesAsync(destination)), Encoding.UTF8.GetString(payload));
+        Check("下载字节数", ok.Bytes.ToString(), payload.Length.ToString());
+        Check("进度回调到最终字节数", reported.ToString(), payload.Length.ToString());
+        Check("没有残留 .part", File.Exists(destination + ".part") ? "left" : "clean", "clean");
+
+        var forbidden = Path.Combine(dir, "forbidden.txt");
+        var denied = await ObjectDownloader.DownloadAsync(prefix + "/forbidden", forbidden, null, CancellationToken.None);
+        Check("403 判为失败", denied.Success ? "ok" : "failed", "failed");
+        Check("403 的说明里带状态码", denied.Error?.Contains("403", StringComparison.Ordinal) == true ? "ok" : denied.Error ?? "<null>", "ok");
+        Check("失败时不留文件", File.Exists(forbidden) || File.Exists(forbidden + ".part") ? "left" : "clean", "clean");
+
+        var missing = await ObjectDownloader.DownloadAsync(prefix + "/missing", Path.Combine(dir, "missing.txt"), null, CancellationToken.None);
+        Check("404 的说明里提示对象不存在", missing.Error?.Contains("不存在", StringComparison.Ordinal) == true ? "ok" : missing.Error ?? "<null>", "ok");
+
+        var invalid = await ObjectDownloader.DownloadAsync("不是链接", Path.Combine(dir, "x.txt"), null, CancellationToken.None);
+        Check("无效链接直接失败", invalid.Success ? "ok" : "failed", "failed");
+
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        try
+        {
+            await ObjectDownloader.DownloadAsync(prefix + "/ok", Path.Combine(dir, "canceled.txt"), null, canceled.Token);
+            Check("取消后抛 OperationCanceledException", "no throw", "throw");
+        }
+        catch (OperationCanceledException)
+        {
+            Check("取消后抛 OperationCanceledException", "throw", "throw");
+        }
+    }
+    finally
+    {
+        if (Directory.Exists(dir))
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    stop.Cancel();
+    listener.Stop();
+    await server;
+}
+
+/// <summary>
+/// 读完整个请求头并返回第一行（请求行）。必须读到空行为止：
+/// 留下没读完的请求数据就关 socket 会触发 RST，客户端看到的是"连接被强制关闭"。
+/// </summary>
+async Task<string> ReadRequestLineAsync(NetworkStream stream)
+{
+    var bytes = new List<byte>();
+    var one = new byte[1];
+    while (true)
+    {
+        var read = await stream.ReadAsync(one);
+        if (read == 0)
+        {
+            break;
+        }
+
+        bytes.Add(one[0]);
+        if (bytes.Count >= 4 && bytes[^4] == (byte)'\r' && bytes[^3] == (byte)'\n' && bytes[^2] == (byte)'\r' && bytes[^1] == (byte)'\n')
+        {
+            break;
+        }
+    }
+
+    var text = Encoding.ASCII.GetString(bytes.ToArray());
+    return text.Split("\r\n")[0];
+}
+
 void WriteSettingsFile(string? targetPath = null)
 {
     var settings = new AppSettings
@@ -459,4 +610,13 @@ string? ReadEnv(string name)
 {
     var value = Environment.GetEnvironmentVariable(name);
     return string.IsNullOrWhiteSpace(value) ? null : value;
+}
+
+/// <summary>
+/// 同步执行的 <see cref="IProgress{T}"/>：<see cref="Progress{T}"/> 会把回调投递到线程池，
+/// 断言时可能还没跑到，所以测试里要就地执行。
+/// </summary>
+sealed class InlineProgress(Action<long> report) : IProgress<long>
+{
+    public void Report(long value) => report(value);
 }

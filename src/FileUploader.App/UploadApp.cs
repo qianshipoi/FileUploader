@@ -29,6 +29,14 @@ public sealed partial class UploadApp : Component
     private Action<Guid?> _setCopiedId = _ => { };
     private bool _isPicking;
 
+    // 历史记录的搜索与下载状态（只在本窗口内有效，不落盘）。
+    private string _searchText = string.Empty;
+    private Action<string> _setSearchText = _ => { };
+    private Guid? _downloadingId;
+    private Action<Guid?> _setDownloadingId = _ => { };
+    private double _downloadProgress;
+    private Action<double> _setDownloadProgress = _ => { };
+
     /// <inheritdoc />
     public override Element Render()
     {
@@ -38,6 +46,9 @@ public sealed partial class UploadApp : Component
         var (isHover, setHover) = UseState(false);
         var (notice, setNotice) = UseState<Notice?>(null, threadSafe: true);
         var (copiedId, setCopiedId) = UseState<Guid?>(null, threadSafe: true);
+        var (searchText, setSearchText) = UseState(string.Empty);
+        var (downloadingId, setDownloadingId) = UseState<Guid?>(null, threadSafe: true);
+        var (downloadProgress, setDownloadProgress) = UseState(0d, threadSafe: true);
 
         _settings = settings;
         _items = items;
@@ -49,6 +60,12 @@ public sealed partial class UploadApp : Component
         _setNotice = setNotice;
         _copiedId = copiedId;
         _setCopiedId = setCopiedId;
+        _searchText = searchText;
+        _setSearchText = setSearchText;
+        _downloadingId = downloadingId;
+        _setDownloadingId = setDownloadingId;
+        _downloadProgress = downloadProgress;
+        _setDownloadProgress = setDownloadProgress;
 
         // 配置变化（设置窗口 / 简洁模式里改的）同步到主窗口。
         UseEffect(

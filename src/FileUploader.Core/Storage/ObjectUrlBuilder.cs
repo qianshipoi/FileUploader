@@ -79,4 +79,19 @@ public static class ObjectUrlBuilder
         settings.UrlMode == UrlMode.Signed
             ? SignedUrl(settings, key, now)
             : DirectUrl(settings, key);
+
+    /// <summary>
+    /// 程序内下载用的地址：只要手里还有密钥就现签一个链接（私有桶也能下、过期了也能下），
+    /// 配置不全时退回历史里存下来的旧链接（可能是直链，也可能已经过期）。
+    /// </summary>
+    /// <returns>没有可用地址时返回 <c>null</c>。</returns>
+    public static string? DownloadUrl(AppSettings settings, string key, string? storedUrl, DateTimeOffset now)
+    {
+        if (settings.IsConfigured && !string.IsNullOrWhiteSpace(key))
+        {
+            return SignedUrl(settings, key, now);
+        }
+
+        return string.IsNullOrWhiteSpace(storedUrl) ? null : storedUrl;
+    }
 }
