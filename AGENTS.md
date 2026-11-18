@@ -132,9 +132,20 @@ dotnet run --project tools\FileUploader.Verify -c Release
 
 ## 8. 文档
 
-- 面向用户的行为变化要同步 `README.md`（中文），保持「功能列表 + 分节说明 + 已验证」三段结构；技术细节写在引用块里。
-- 新增文件后在 README 的目录树里补一行说明。
-- 截图放 `docs/`，命名 `screenshot-<场景>.png`。
+- `README.md` 只放**项目概览**（功能一览 / 运行环境 / 快速开始 / 文档索引 / 已知限制），不要写成手册；细节都进 `docs/`：
+
+| 文件 | 内容 |
+|---|---|
+| `docs/usage.md` | 面向使用者的完整说明：界面分工、使用步骤、设置项、历史搜索与下载、ZIP 打包、链接类型、简洁模式、拖拽浮现、托盘、静默启动、单实例、开机自启、检查更新、命令行、数据文件 |
+| `docs/deployment.md` | 便携版分发、导出配置给对方（含加密格式说明） |
+| `docs/development.md` | 技术栈、构建/发布、项目结构、自测与回归、Docker + RustFS 本地验证、调试开关、踩过的坑 |
+| `docs/release.md` | 发版流程、版本号要两边一致、推荐步骤 |
+| `docs/verification.md` | 已验证清单（真的跑过的结论，回归对照用） |
+| `docs/troubleshooting.md` | 排查与常见问题、已知限制 |
+
+- 行为变化时：用户可见的写进 `docs/usage.md`（必要时同步 `docs/troubleshooting.md` 的已知限制），`README.md` 只在"功能一览/已知限制"真的变了才改。
+- 新的验证结论追加一条到 `docs/verification.md`（一句话说清做了什么、断言了什么，附命令/脚本名）。
+- 新增源码文件后在 `docs/development.md` 的项目结构里补一行；截图放 `docs/`，命名 `screenshot-<场景>.png`，在 `docs/usage.md` 里引用。
 
 ## 9. 沟通方式
 
