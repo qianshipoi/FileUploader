@@ -7,11 +7,8 @@ internal static class CrashLog
 {
     private static readonly object Gate = new();
 
-    /// <summary>日志路径（便携模式下跟随 data 目录）。</summary>
-    public static string Path => System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "FileUploader",
-        "crash.log");
+    /// <summary>日志路径（便携模式下跟随 exe 旁的 data 目录，和配置/历史放一起）。</summary>
+    public static string Path => System.IO.Path.Combine(FileUploader.Core.AppPaths.DataDirectory, "crash.log");
 
     /// <summary>挂上全局未处理异常钩子（进程级 + 任务级）。</summary>
     public static void Install()

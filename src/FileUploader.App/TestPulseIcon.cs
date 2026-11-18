@@ -133,14 +133,10 @@ internal sealed class TestPulseIcon : Component<bool>
             .VAlign(VerticalAlignment.Center);
 
     /// <summary>次要文字色（空闲折线 / 扫描底图）。</summary>
-    private static Brush SecondaryBrush =>
-        ThemeResource.Brush("TextFillColorSecondaryBrush")
-        ?? new SolidColorBrush(Windows.UI.Color.FromArgb(0xFF, 0x8A, 0x8A, 0x8A));
+    private static Brush SecondaryBrush => ThemeBrushes.SecondaryText;
 
     /// <summary>强调色（扫描的亮线）。</summary>
-    private static Brush AccentBrush =>
-        ThemeResource.Brush("AccentTextFillColorPrimaryBrush")
-        ?? new SolidColorBrush(Windows.UI.Color.FromArgb(0xFF, 0x0F, 0x6C, 0xBD));
+    private static Brush AccentBrush => ThemeBrushes.Accent;
 
     /// <summary>取同色但指定透明度的刷子（PathElement 没有 Opacity 属性，只能改颜色）。</summary>
     private static Brush Fade(Brush source, byte alpha)

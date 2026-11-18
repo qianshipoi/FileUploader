@@ -24,8 +24,8 @@ public sealed partial class UploadApp
             : "尚未配置存储";
 
         // 虚线描边：空闲用控件描边色，鼠标悬停或拖拽进入时换成强调色并加粗。
-        var stroke = ThemeResource.Brush(accent ? "AccentFillColorDefaultBrush" : "ControlStrokeColorDefaultBrush")
-                     ?? new SolidColorBrush(Windows.UI.Color.FromArgb(0x66, 0x86, 0x86, 0x86));
+        // 用安全取法：主题资源缺失时退回固定颜色，别让整页炸掉（见 ThemeBrushes 的注释）。
+        var stroke = ThemeBrushes.Stroke(accent);
 
         // 目标桶只是信息展示，别让它挡住「整块区域可点击」。
         var badge = Border(
@@ -69,7 +69,7 @@ public sealed partial class UploadApp
                                     .Width(hovered ? 30 : 26)
                                     .Height(hovered ? 30 : 26)
                                     .HAlign(HorizontalAlignment.Center)
-                                    .Set(icon => icon.Foreground = ThemeResource.Brush(accent ? "AccentTextFillColorPrimaryBrush" : "TextFillColorSecondaryBrush") ?? icon.Foreground),
+                                    .Set(icon => icon.Foreground = ThemeBrushes.IconForeground(accent)),
                                 TextBlock(title)
                                     .FontSize(17)
                                     .SemiBold()
