@@ -54,6 +54,9 @@ switch (mode)
     case "zip":
         await RunZipChecksAsync();
         break;
+    case "update":
+        RunUpdateChecks();
+        break;
     default:
         Console.WriteLine("用法: FileUploader.Verify [vectors|exchange|presign|download|zip|upload|live-oss|settings|delete-object]");
         return 2;
@@ -658,6 +661,90 @@ async Task RunZipChecksAsync()
             Directory.Delete(dir, recursive: true);
         }
     }
+}
+
+/// <summary>
+/// 检查更新的离线回归：版本比较、从 Release 说明里抽「本次变更」、抽 SHA256、解析 GitHub 的 release JSON。
+/// 不打网络（真下载见 tools/update-e2e-test.ps1）。
+/// </summary>
+void RunUpdateChecks()
+{
+    Check("版本比较：补丁号更高", UpdateChecker.IsNewer("0.2.1", "0.2.0") ? "newer" : "not", "newer");
+    Check("版本比较：v 前缀不影响", UpdateChecker.IsNewer("v0.3.0", "0.2.9") ? "newer" : "not", "newer");
+    Check("版本比较：同版本算最新", UpdateChecker.IsNewer("0.2.0", "v0.2.0") ? "newer" : "same", "same");
+    Check("版本比较：旧版本不算新", UpdateChecker.IsNewer("0.1.9", "0.2.0") ? "newer" : "old", "old");
+    Check("版本比较：1.0 比 0.9.9 新", UpdateChecker.IsNewer("1.0", "0.9.9") ? "newer" : "not", "newer");
+    Check("版本比较：正式版比预发布新", UpdateChecker.IsNewer("0.3.0", "0.3.0-beta.2") ? "newer" : "not", "newer");
+    Check("版本比较：预发布不比正式版新", UpdateChecker.IsNewer("0.3.0-beta.2", "0.3.0") ? "newer" : "not", "not");
+    Check("版本比较：beta.10 比 beta.9 新（字典序陷阱）", UpdateChecker.IsNewer("0.3.0-beta.10", "0.3.0-beta.9") ? "newer" : "not", "newer");
+    Check("版本比较：非法版本号不误判", UpdateChecker.IsNewer("不是版本", "0.2.0") ? "newer" : "not", "not");
+    Check("版本号归一化", UpdateChecker.NormalizeVersion("v0.2.0+abc1234"), "0.2.0");
+
+    // Release 说明：真实结构（含「本次变更」小节 + SHA256 校验块）
+    var notes = string.Join("\n", new[]
+    {
+        "## OSS 拖拽上传",
+        "",
+        "### 下载",
+        "",
+        "| 文件 | 说明 |",
+        "|---|---|",
+        "| `FileUploader-0.3.0-win-x64.exe` | 单文件便携版 |",
+        "",
+        "### 校验",
+        "",
+        "```",
+        "SHA256 (FileUploader-0.3.0-win-x64.exe) = " + new string('a', 64),
+        "SHA256 (FileUploader-0.3.0-win-x64.zip) = " + new string('b', 64),
+        "```",
+        "",
+        "### 本次变更（v0.2.0..v0.3.0）",
+        "",
+        "- feat(ui): 新增检查更新 (abc1234)",
+        "- fix(core): 修个 bug (def5678)",
+        "",
+        "### 感谢",
+        "",
+        "- 不应该被当成变更收集",
+    });
+
+    var changes = UpdateChecker.ExtractChanges(notes);
+    Check("提取变更条数", changes.Count.ToString(), "2");
+    Check("提取变更第一条", changes[0], "feat(ui): 新增检查更新 (abc1234)");
+    Check("变更只取本节（后面的小节不算）", string.Join("|", changes), "feat(ui): 新增检查更新 (abc1234)|fix(core): 修个 bug (def5678)");
+
+    Check("SHA 按资产名优先匹配", UpdateChecker.FindSha256(notes, "FileUploader-0.3.0-win-x64.zip") ?? "", new string('b', 64));
+    Check("SHA 资产名对不上时退回第一个", UpdateChecker.FindSha256(notes, "other.exe") ?? "", new string('a', 64));
+
+    // GitHub release JSON（形状与真实接口一致）
+    var json = string.Join("\n", new[]
+    {
+        "{",
+        "  \"tag_name\": \"v0.3.0\",",
+        "  \"name\": \"OSS 拖拽上传 v0.3.0\",",
+        "  \"html_url\": \"https://github.com/qianshipoi/FileUploader/releases/tag/v0.3.0\",",
+        "  \"published_at\": \"2026-11-18T06:00:00Z\",",
+        "  \"prerelease\": false,",
+        "  \"body\": " + System.Text.Json.JsonSerializer.Serialize(notes) + ",",
+        "  \"assets\": [",
+        "    { \"name\": \"FileUploader-0.3.0-win-x64.zip\", \"size\": 87074223, \"digest\": \"sha256:" + new string('B', 64) + "\", \"browser_download_url\": \"https://example.com/x.zip\" },",
+        "    { \"name\": \"FileUploader-0.3.0-win-x64.exe\", \"size\": 93026337, \"digest\": \"sha256:" + new string('A', 64) + "\", \"browser_download_url\": \"https://example.com/x.exe\" }",
+        "  ]",
+        "}",
+    });
+
+    var parsed = UpdateChecker.Parse("0.2.0", json);
+    Check("解析：有更新", parsed.Status.ToString(), "UpdateAvailable");
+    Check("解析：最新版本（去掉 v）", parsed.LatestVersion ?? "", "0.3.0");
+    Check("解析：tag", parsed.TagName ?? "", "v0.3.0");
+    Check("解析：选的是 exe 资产", parsed.AssetName ?? "", "FileUploader-0.3.0-win-x64.exe");
+    Check("解析：下载地址", parsed.AssetUrl ?? "", "https://example.com/x.exe");
+    Check("解析：资产大小", parsed.AssetSize.ToString(), "93026337");
+    Check("解析：digest 归一化成小写", parsed.AssetSha256 ?? "", new string('a', 64));
+    Check("解析：变更清单", (parsed.Changes?.Count ?? 0).ToString(), "2");
+    Check("解析：发布页链接", parsed.ReleasePageUrl ?? "", "https://github.com/qianshipoi/FileUploader/releases/tag/v0.3.0");
+    Check("解析：同版本 → 已是最新", UpdateChecker.Parse("0.3.0", json).Status.ToString(), "UpToDate");
+    Check("解析：没有 tag 时判失败", UpdateChecker.Parse("0.2.0", "{\"assets\":[]}").Status.ToString(), "Failed");
 }
 
 void WriteSettingsFile(string? targetPath = null)

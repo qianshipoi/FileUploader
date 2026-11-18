@@ -17,6 +17,9 @@ public sealed partial class UploadApp
         AppWindows.EnsureTray();
         AppWindows.EnsureDragFlash();
 
+        // 上一次自动更新留下的旧 exe（FileUploader.exe.old）：新进程已经跑起来了，可以删了。
+        Updater.CleanupPreviousVersion();
+
         // 静默启动：主窗口在挂载后才会被 Reactor 显示出来，所以隐藏带几次延迟收敛。
         AppWindows.ApplyStartupVisibility();
 

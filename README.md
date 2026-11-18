@@ -34,6 +34,7 @@
 - **托盘常驻**：点关闭不再退出，而是收进托盘；左键/双击托盘图标恢复主窗口，右键菜单有「打开主窗口 / 简洁模式 / 设置 / 退出」，只有点「退出」才真正结束进程。
 - **静默启动**：设置里打开「静默启动」后，双击 exe 不弹主窗口、只在托盘里待命（想用的时候点托盘图标叫回来）。还没配置存储、或把文件拖到 exe 上启动时仍会显示窗口，不会让人以为程序没启动。
 - **开机自启**：设置里打开「开机自启」即写当前用户的启动项（任务管理器「启动」页可见、可关），不用管理员；和「静默启动」一起开就是开机直接进托盘。
+- **检查更新（手动）**：设置页「关于与更新」里点一下，读 GitHub Release 的最新版本，列出「本次更新了哪些地方」；确认后自动下载 → 校验 SHA256 → 替换当前 exe → 重启。托盘右键菜单里也有「检查更新」。
 - **并发 3 路上传**、实时进度、失败重试、取消。
 - **命令行也能用**：`FileUploader.exe a.png b.txt "D:\照片"`（或把文件/文件夹拖到 exe 图标上）启动即上传；`FileUploader.exe --settings` 直接打开设置窗口。
 - **配置可导出分发**：导出成 exe 同目录的 `FileUploader.export.bin`（AES-GCM 加密的二进制，不是可读文本），对方首次启动自动导入并自测连接，测通后自动删除该文件。
@@ -224,6 +225,18 @@ FileUploader.exe --flash-preview   # 开发用：依次演示 提示 → 可投�
 - **临时文件**：压缩包写在 `%TEMP%\FileUploader\<GUID>.zip`，上传成功、失败、取消、手动移除都会删掉；打包期间临时目录需要大约等于源体积的空闲空间（测试用的 600 个文件 / 58.6 MB → zip 61.5 MB）。
 - 打包只用 .NET 自带的 `System.IO.Compression`，没有新增依赖；读取时用共享读方式打开源文件，正在被别的程序写日志也能读；读不到的文件会被跳过并在提示条里说明。
 
+## 检查更新（手动）
+
+设置页最下面的「关于与更新」卡片，或者托盘右键菜单里的「检查更新」。
+
+- **数据来源**：`https://api.github.com/repos/qianshipoi/FileUploader/releases/latest`（匿名，未登录每小时 60 次，够用）。读的是最新 **正式版**，draft/预发布不会推给你。
+- **「更新了哪些地方」**：直接取 Release 说明里 `### 本次变更（上一个 tag..本次 tag）` 那一节的列表项（发版流水线自动生成的提交清单），最多显示 20 条，多的给个链接。没有这一节时提示去发布页看。
+- **更新流程**：下载 `FileUploader-<版本>-win-x64.exe` → **校验 SHA256**（用 Release 资产自带的 `digest`，没有就退回说明里的 `SHA256 (...)` 行）→ 复制成 `FileUploader.new.exe` → 当前 exe 改名成 `.old` → 新的顶到正式名 → 启动新进程 → 本进程退出。任何一步失败都会把 `.old` 改回去并给出原因，不会留下一个没有 exe 的目录；`.old` 会在下次启动时自动删掉。
+- **安全边界**：正在上传/打包时不允许更新（会提示等传完），替换前会先把配置落盘。配置和历史在 `%APPDATA%`（或便携目录 `data/`）里，更新只换 exe，不动数据。
+- 下载缓存在 `%TEMP%\FileUploader\update-<版本>\`，校验失败的文件会立刻删掉。
+
+引用块：为什么不用后台自动检查？这是有意的 —— 工具本身不需要联网常驻，只在你想查的时候查一次，也不用在后台偷偷发请求。
+
 ## 链接类型
 
 | 模式 | 行为 | 适用 |
@@ -266,6 +279,7 @@ FileUploader.exe --flash-preview   # 开发用：依次演示 提示 → 可投�
 | `%APPDATA%\FileUploader\settings.json` | 配置；`Secret` 字段是 Windows DPAPI（当前用户）加密后的 Base64（便携模式下为 `exe目录\data\settings.json`） |
 | `%APPDATA%\FileUploader\history.json` | 最近 200 条上传记录（便携模式同样在 `data\` 下） |
 | `%TEMP%\FileUploader\<GUID>.zip` | 「打包成 ZIP 上传」用的临时压缩包；上传成功/失败/取消/移除后自动删除 |
+| `%TEMP%\FileUploader\update-<版本>\` | 检查更新下载到的新版 exe（校验通过才会拿去替换；校验失败立即删除） |
 
 设置窗口底部有「打开配置目录」可直接定位。密钥换机器/换账户无法解密，程序会提示重填。
 
@@ -304,6 +318,7 @@ src/FileUploader.Core/              与 UI 无关的存储层
   SettingsStore.cs                  settings.json 读写（密钥 DPAPI 加密）
   HistoryStore.cs                   history.json（最近 200 条）
   ZipPackager.cs                    多个文件打成一个 zip（进度 / 跳过坏文件 / 命名）
+  UpdateChecker.cs                  检查更新：读 GitHub Release / 版本比较 / 提取「本次变更」/ SHA256
   ObjectKey.cs                      对象键构造 + RFC 3986 编码
   Storage/ObjectUrlBuilder.cs       直链 / 预签名链接（OSS V1、SigV4）+ 下载用地址
   ContentTypes.cs                   扩展名 → Content-Type
@@ -326,6 +341,8 @@ src/FileUploader.App/               WinUI 3 + Reactor 界面
   UploadApp.Uploading.cs            上传队列（并发 3、进度、取消、历史落盘）
   SettingsWindow.cs                 独立的设置窗口（存储 + 启动行为）
   StartupRegistration.cs            开机自启（HKCU Run 启动项：写入 / 删除 / 启动时校正）
+  AppVersion.cs                     当前版本号（来自 csproj 的 <Version>，发版时由 tag 覆盖）
+  Updater.cs                        自更新：下载 + SHA256 校验 + 替换 exe + 重启 + 失败回滚
   SettingsState.cs                  跨窗口共享配置（INotifyPropertyChanged + 防抖落盘）
   DropExpander.cs                   拖入项 → 文件列表（文件夹递归；有路径时走 System.IO 快路径）
   UploadModels.cs                   上传条目 / 提示条模型
@@ -335,6 +352,7 @@ tools/capture.ps1                   截图小工具（调试用）
 tools/uia-settings.ps1              设置窗口的 UI 自动化脚本（回归验证用）
 tools/uia-history-search.ps1        历史记录搜索与「下载」保存对话框的 UI 自动化回归
 tools/tray-activate-test.ps1       托盘激活回归：窗口被别的窗口压住时点托盘要能叫到前台
+tools/update-e2e-test.ps1          检查更新与自更新回归：本机假 feed → 真下载 → 真替换 → 真重启
 tools/flash-drop-test.ps1           拖拽浮现气泡回归（位置 / 命中穿透 / 落点注册 / 设置开关 / 拖选文字）
 tools/real-drag-onto-bubble.ps1     真实拖拽验证（资源管理器拖文件到气泡，ESC 取消不上传）
 docs/                               截图
@@ -370,6 +388,9 @@ docs/                               截图
 - 顺带修掉一个真实卡顿：拖入 600 个文件的文件夹时，WinRT 逐个 `GetBasicPropertiesAsync` 读大小要 ≈55 秒（拖进去像卡死）；改成有真实路径时走 `System.IO` 快路径后，同一文件夹 2.0 秒就出现「打包中」那一行。
 - 修掉「窗口压在别的窗口下面时，点/双击托盘没反应」：根因是点托盘图标时用户输入是发给 shell 的，系统不认为本进程拿到最后一次输入，`SetForegroundWindow` 被前台锁定规则**静默拒绝**（实测返回 `false`：窗口一动不动，用「临时置顶再取消」也还是 `false`）。现在的做法是 `AttachThreadInput` 挂到当前前台线程 → `BringWindowToTop` → `SetForegroundWindow`（实测 `true`），最小化时先 `SW_RESTORE`；万一还是没拿到前台就写一条 `crash.log`（含两个 hwnd），不再静默失败。
 - 托盘激活的回归脚本 `tools/tray-activate-test.ps1`（`--bring-preview` 触发和点托盘完全相同的那条路径）：记事本当遮挡物 → 断言本程序窗口可见但不是前台 → 触发 → 断言前台变成 `OSS 拖拽上传`。**同一脚本在「注释掉修复」的构建上会 FAIL**（前台仍是记事本），说明它真的抓得住这个 bug。
+- 检查更新的离线自测（`FileUploader.Verify update`，26 项）：版本比较（v 前缀、同版本、预发布、`beta.10 > beta.9` 的字典序陷阱、非法版本号）、从 Release 说明里只抽「本次变更」那一节、SHA256 按资产名优先匹配、解析真实形状的 release JSON（选中 win-x64 exe、`digest` 归一化成小写、`size`、发布页链接）。
+- 检查更新的**真实网络**实测：便携副本（版本 0.2.0）→ UIA 点「检查更新」→ 打 `api.github.com` 拿到最新 release `v0.2.0` → 显示「已经是最新版本（0.2.0）」。
+- 自更新端到端（`tools/update-e2e-test.ps1`，本机假 feed + 假新版 exe，不碰真实 GitHub）：界面列出「发现新版本 9.9.9」和两条变更 → **摘要故意给错时拒绝替换并提示「校验失败…已丢弃，没有替换任何文件」**（exe 哈希不变）→ 换成正确摘要后真下载、真替换：旧进程退出、新进程起来、磁盘上的 exe SHA256 与 feed 一致、没有留下 `.new` 中间文件、缓存在 `%TEMP%\FileUploader\update-9.9.9\`，重启后 `.old` 被自动清理且程序正常运行。
 - `dotnet build`（Debug/Release）与 `dotnet publish` 均无警告无错误。
 
 ## 排查闪退
@@ -388,12 +409,15 @@ git push origin v0.1.0    # 推送 tag 即触发
 - 流水线：`.github/workflows/release.yml`（tag 触发；也可在 Actions 页面手动输入 tag 重发，已存在的 Release 会覆盖上传）。
 - 产物：`FileUploader-<版本>-win-x64.exe`（≈89 MB，自带 .NET 10 运行时 + Windows App SDK）与同名 `.zip`。
 - Release 说明自动带上下载表格、SHA256 校验值和「上一个 tag → 本次 tag」的提交清单；tag 带 `-` 的（如 `v1.2.3-beta.1`）自动标为 pre-release。
+- **版本号要两边一致**：程序里的版本来自 `src/FileUploader.App/FileUploader.App.csproj` 的 `<Version>`（发版流水线会用 `-p:Version=<tag>` 覆盖成 tag 的版本）。所以打 tag 前把 csproj 的 `<Version>` 也改成同一个号，这样本地构建的版本号、Release 的 tag、检查更新的比较三者才对得上。
 - 日常提交/PR 只跑 `.github/workflows/ci.yml`（编译 + 签名自测），不发版。
 
 ## 已知限制
 
 - 只实现单次 `PUT Object`（简单上传），没有分片/断点续传；阿里云 OSS 与 S3 简单上传上限均为 5 GB。
 - 「打包成 ZIP 上传」是一次拖入打一个包（不会按子文件夹拆包），打包期间 `%TEMP%` 需要约等于源体积的空闲空间；而且**只打包文件**，空目录不会进包。
+- 检查更新要能访问 `api.github.com`：墙内/公司网络可能需要系统代理或 `HTTPS_PROXY`。连不上时设置页只给一行错误提示，不影响其它功能。
+- 自更新只替换**当前目录里的 exe**：如果程序装在 `Program Files` 这类需要管理员权限的目录，替换会失败并提示手动下载；也可以直接用 `-win-x64.exe` 便携版替换。
 - 签名链接最长 7 天（阿里云与 S3 SigV4 一致限制），更长的链接需要自己做 CDN + 私有鉴权。
 - 只支持 Windows；界面文字为中文。
 - Reactor 目前是 preview 版（`0.1.0-preview.16`），升级小版本时分析器可能给出新的建议警告。

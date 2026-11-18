@@ -22,6 +22,38 @@ public sealed class SettingsWindow : Component
     private Action<Notice?> _setNotice = _ => { };
     private ReactorWindow? _window;
 
+    // 「关于与更新」
+    private UpdateCheckResult? _update;
+    private Action<UpdateCheckResult?> _setUpdate = _ => { };
+    private bool _checkingUpdate;
+    private Action<bool> _setCheckingUpdate = _ => { };
+    private bool _applyingUpdate;
+    private Action<bool> _setApplyingUpdate = _ => { };
+    private double _updateProgress;
+    private Action<double> _setUpdateProgress = _ => { };
+
+    /// <summary>Render 已经跑过一次，说明 <c>_setXxx</c> 都接好了，可以直接触发检查。</summary>
+    private bool _rendered;
+
+    /// <summary>托盘点「检查更新」时置位：设置窗口还没渲染时先记着，挂载后自动查一次。</summary>
+    private static bool _pendingUpdateCheck;
+
+    /// <summary>从外面（托盘菜单）请求检查更新。</summary>
+    internal static void RequestUpdateCheck() => _pendingUpdateCheck = true;
+
+    /// <summary>窗口已经开着时，直接在这个实例上开始检查。</summary>
+    internal void StartUpdateCheck()
+    {
+        _pendingUpdateCheck = false;
+        if (_rendered)
+        {
+            _ = CheckUpdatesAsync();
+            return;
+        }
+
+        _pendingUpdateCheck = true;
+    }
+
     /// <inheritdoc />
     public override Element Render()
     {
@@ -30,12 +62,41 @@ public sealed class SettingsWindow : Component
         var (testing, setTesting) = UseState(false, threadSafe: true);
         var (notice, setNotice) = UseState<Notice?>(SettingsState.LoadWarning is { } warning ? Notice.Error(warning) : null, threadSafe: true);
 
+        // 「关于与更新」的状态
+        var (update, setUpdate) = UseState<UpdateCheckResult?>(null, threadSafe: true);
+        var (checkingUpdate, setCheckingUpdate) = UseState(false, threadSafe: true);
+        var (applyingUpdate, setApplyingUpdate) = UseState(false, threadSafe: true);
+        var (updateProgress, setUpdateProgress) = UseState(0d, threadSafe: true);
+
         _settings = settings;
         _testing = testing;
         _setTesting = setTesting;
         _notice = notice;
         _setNotice = setNotice;
         _window = UseWindow();
+        _update = update;
+        _setUpdate = setUpdate;
+        _checkingUpdate = checkingUpdate;
+        _setCheckingUpdate = setCheckingUpdate;
+        _applyingUpdate = applyingUpdate;
+        _setApplyingUpdate = setApplyingUpdate;
+        _updateProgress = updateProgress;
+        _setUpdateProgress = setUpdateProgress;
+        _rendered = true;
+
+        // 托盘菜单点「检查更新」进来的：窗口挂载后自动查一次。
+        UseEffect(
+            () =>
+            {
+                if (_pendingUpdateCheck)
+                {
+                    _pendingUpdateCheck = false;
+                    _ = CheckUpdatesAsync();
+                }
+
+                return () => { };
+            },
+            Array.Empty<object>());
 
         // 跟随全局状态：主窗口改了配置这里也会同步；保存状态变化也会刷新。
         UseEffect(
@@ -113,6 +174,7 @@ public sealed class SettingsWindow : Component
             BuildStorageCard(),
             BuildLinkCard(),
             BuildBehaviorCard(),
+            BuildAboutCard(),
             TextBlock($"密钥用 Windows DPAPI 加密后保存在 {SettingsStore.FilePath}，仅当前 Windows 账户可解密。" +
                       (AppPaths.IsPortable ? "（便携模式：配置随 exe 所在目录）" : string.Empty))
                 .FontSize(11)
@@ -240,6 +302,235 @@ public sealed class SettingsWindow : Component
                     "拖文件到屏幕右下角就浮出气泡，松手即上传；关掉后不再创建那个隐形窗口，也不装拖拽探测器。",
                     _settings.FlashDropEnabled,
                     value => SetField(s => s with { FlashDropEnabled = value }))));
+
+    /// <summary>
+    /// 「关于与更新」：当前版本 + 检查更新 + 「更新了哪些地方」+ 一键更新（下载 → 校验 SHA256 → 替换 → 重启）。
+    /// 只手动触发：平时不联网，也不用担心后台检查打扰。
+    /// </summary>
+    private Element BuildAboutCard()
+    {
+        var busy = _checkingUpdate || _applyingUpdate;
+        var rows = new List<Element>
+        {
+            Grid(
+                columns: [GridSize.Star(), GridSize.Auto],
+                rows: [GridSize.Auto],
+                children:
+                [
+                    VStack(
+                            2,
+                            TextBlock($"当前版本 {AppVersion.Current}").FontSize(13),
+                            TextBlock("手动检查 GitHub Release；下载后替换当前目录的 FileUploader.exe 并重启，配置与历史都不受影响。")
+                                .FontSize(11)
+                                .Foreground(Theme.TertiaryText)
+                                .TextWrapping())
+                        .Grid(column: 0)
+                        .Margin(0, 0, 12, 0)
+                        .VAlign(VerticalAlignment.Center),
+#pragma warning disable REACTOR_A11Y_001 // 文案是动态的（检查中…）
+                    Button(_checkingUpdate ? "检查中…" : "检查更新", OnCheckUpdates)
+                        .AutomationName("检查更新")
+                        .IsEnabled(!busy)
+                        .Grid(column: 1),
+#pragma warning restore REACTOR_A11Y_001
+                ]),
+        };
+
+        if (_applyingUpdate)
+        {
+            rows.Add(TextBlock($"正在下载新版… {_updateProgress:P0}").FontSize(12).Foreground(Theme.SecondaryText));
+            rows.Add(Progress(_updateProgress * 100).Height(4).AutomationName("更新下载进度"));
+        }
+
+        if (_update is { } result)
+        {
+            rows.Add(BuildUpdateResult(result));
+        }
+
+        return Section(
+            "关于与更新",
+            "更新来自 GitHub 的 Release；程序就是一个 exe，删掉它等于卸载。",
+            VStack(12, rows.ToArray()));
+    }
+
+    private Element BuildUpdateResult(UpdateCheckResult result)
+    {
+        switch (result.Status)
+        {
+            case UpdateCheckStatus.Failed:
+                return VStack(
+                    8,
+                    TextBlock($"检查失败：{result.Error}").FontSize(12).Foreground(Theme.SystemCritical).TextWrapping(),
+                    HStack(8, Button("打开发布页", OpenReleasePage).SubtleButton()));
+
+            case UpdateCheckStatus.UpToDate:
+                return VStack(
+                    8,
+                    TextBlock($"已经是最新版本（{result.CurrentVersion}）。").FontSize(12).Foreground(Theme.SystemSuccess),
+                    HStack(8, Button("打开发布页", OpenReleasePage).SubtleButton()));
+
+            default:
+                var changes = result.Changes ?? Array.Empty<string>();
+                var details = new List<Element>
+                {
+                    TextBlock(
+                            $"发现新版本 {result.LatestVersion}（当前 {result.CurrentVersion}）" +
+                            (result.PublishedAt is { } publishedAt ? $" · 发布于 {publishedAt:yyyy-MM-dd}" : string.Empty))
+                        .FontSize(13)
+                        .SemiBold()
+                        .Foreground(Theme.Accent),
+                };
+
+                if (changes.Count == 0)
+                {
+                    details.Add(TextBlock("这个版本没有写变更清单，点「打开发布页」可以看完整说明。")
+                        .FontSize(11)
+                        .Foreground(Theme.TertiaryText)
+                        .TextWrapping());
+                }
+                else
+                {
+                    details.Add(TextBlock($"本次更新（{changes.Count} 项）：").FontSize(11).Foreground(Theme.TertiaryText));
+                    foreach (var change in changes.Take(20))
+                    {
+                        details.Add(TextBlock("· " + change)
+                            .FontSize(12)
+                            .Foreground(Theme.SecondaryText)
+                            .TextWrapping()
+                            .Margin(6, 0, 0, 0));
+                    }
+
+                    if (changes.Count > 20)
+                    {
+                        details.Add(TextBlock($"…… 还有 {changes.Count - 20} 项，见发布页")
+                            .FontSize(11)
+                            .Foreground(Theme.TertiaryText)
+                            .Margin(6, 0, 0, 0));
+                    }
+                }
+
+                if (string.IsNullOrEmpty(result.AssetUrl))
+                {
+                    details.Add(TextBlock("这个 Release 里没有 win-x64 单文件 exe，请到发布页手动下载。")
+                        .FontSize(11)
+                        .Foreground(Theme.SystemCaution)
+                        .TextWrapping());
+                }
+
+#pragma warning disable REACTOR_A11Y_001 // 文案是动态的（更新中…）
+                details.Add(HStack(
+                    8,
+                    Button(_applyingUpdate ? "更新中…" : "立即更新并重启", OnApplyUpdate)
+                        .AccentButton()
+                        .IsEnabled(!_applyingUpdate && !_checkingUpdate && !string.IsNullOrEmpty(result.AssetUrl)),
+                    Button("打开发布页", OpenReleasePage).SubtleButton()));
+#pragma warning restore REACTOR_A11Y_001
+
+                return VStack(8, details.ToArray());
+        }
+    }
+
+    private void OnCheckUpdates() => _ = CheckUpdatesAsync();
+
+    private async Task CheckUpdatesAsync()
+    {
+        if (_checkingUpdate || _applyingUpdate)
+        {
+            return;
+        }
+
+        _setUpdate(null);
+        _setCheckingUpdate(true);
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var result = await UpdateChecker.CheckAsync(AppVersion.Current, cts.Token);
+            _setUpdate(result);
+            if (result.Status == UpdateCheckStatus.Failed)
+            {
+                _setNotice(Notice.Error($"检查更新失败：{result.Error}"));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _setUpdate(UpdateCheckResult.Fail(AppVersion.Current, "检查更新超时了，请检查网络或代理。"));
+        }
+        catch (Exception ex)
+        {
+            _setUpdate(UpdateCheckResult.Fail(AppVersion.Current, ex.Message));
+        }
+        finally
+        {
+            _setCheckingUpdate(false);
+        }
+    }
+
+    private async void OnApplyUpdate()
+    {
+        var update = _update;
+        if (update is null || !update.HasUpdate || _applyingUpdate)
+        {
+            return;
+        }
+
+        if (UploadQueue.Current.IsBusy)
+        {
+            _setNotice(Notice.Error("还有文件在上传/打包，等它传完再更新，别把正在进行的传输打断。"));
+            return;
+        }
+
+        _setApplyingUpdate(true);
+        _setUpdateProgress(0);
+        try
+        {
+            var progress = new Progress<double>(value => _setUpdateProgress(value));
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+            var download = await Updater.DownloadAsync(update, progress, cts.Token);
+            if (!download.Success || download.Path is null)
+            {
+                _setNotice(Notice.Error(download.Error ?? "更新失败。"));
+                return;
+            }
+
+            // 换 exe 之前先把配置落盘，免得刚改的设置丢掉。
+            SettingsState.Current.SaveNow();
+
+            var apply = Updater.ApplyAndRestart(download.Path);
+            if (!apply.Success)
+            {
+                _setNotice(Notice.Error(apply.Error ?? "更新失败。"));
+                return;
+            }
+
+            // 新进程已经起来了，这边直接退出（托盘图标也一起收掉）。
+            AppWindows.ExitApplication();
+        }
+        catch (OperationCanceledException)
+        {
+            _setNotice(Notice.Error("下载新版超时了（10 分钟），请检查网络后重试。"));
+        }
+        catch (Exception ex)
+        {
+            _setNotice(Notice.Error($"更新失败：{ex.Message}"));
+        }
+        finally
+        {
+            _setApplyingUpdate(false);
+        }
+    }
+
+    private void OpenReleasePage()
+    {
+        var url = _update?.ReleasePageUrl ?? UpdateChecker.ReleasesPageUrl;
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _setNotice(Notice.Error($"打不开发布页：{ex.Message}"));
+        }
+    }
 
     /// <summary>一张卡片：卡片标题 + 一句说明 + 内容（间距比卡片之间更紧）。</summary>
     private static Element Section(string title, string description, Element content) =>

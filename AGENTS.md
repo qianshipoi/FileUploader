@@ -73,6 +73,7 @@ Conventional Commits，**标题英文类型 + 中文描述**，正文用中文�
 ### 4.4 调试开关
 
 - 临时诊断日志必须用环境变量开关，默认静默，例如 `FU_FLASH_DEBUG=1` 才会写 `%TEMP%\fu-flash.log`。
+- 检查更新的 feed 也可以用环境变量顶掉：`FU_UPDATE_FEED=http://127.0.0.1:PORT/release.json`（指向一份与 GitHub release 同形状的 JSON），回归脚本靠它跑真下载 + 真替换而不必真的发版。
 - 开发用的预览入口用启动参数（`--menu-preview`、`--flash-preview`、`--bring-preview`、`--compact`），不要为了测试改默认行为。`--bring-preview` 的延迟可用环境变量 `FU_BRING_PREVIEW_MS` 覆盖（回归脚本要在这之前把遮挡物摆好）。
 
 ## 5. 构建、运行与回归
@@ -99,6 +100,7 @@ dotnet run --project tools\FileUploader.Verify -c Release
 | `uia-history-search.ps1` | 历史记录：按文件名搜索 / 清除搜索 / 「下载」弹出的保存对话框（不依赖鼠标） |
 | `uia-tray-menu.ps1` | 托盘菜单结构与点击 |
 | `tray-activate-test.ps1` | 托盘激活：窗口被别的窗口压住时点托盘要能把它叫到前台（用 `--bring-preview` 触发同一条路径） |
+| `update-e2e-test.ps1` | 检查更新与自更新：本机假 feed（`FU_UPDATE_FEED`）→ 错误摘要必须拒绝替换 → 真下载真替换真重启 |
 | `uia-header-gear.ps1` / `uia-click.ps1` / `uia-pick.ps1` / `uia-invoke-test.ps1` | 主窗口控件交互 |
 | `compact-race-test.ps1` | 简洁模式快速进出、气泡与主窗口竞态 |
 | `bubble-placement-test.ps1` | 气泡拖拽与位置记忆 |

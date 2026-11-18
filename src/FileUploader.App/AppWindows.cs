@@ -42,6 +42,7 @@ internal static class AppWindows
     private static extern uint GetCurrentThreadId();
 
     private static ReactorWindow? _settings;
+    private static SettingsWindow? _settingsComponent;
     private static NativeBubbleWindow? _bubble;
     private static ReactorTrayIcon? _tray;
     private static bool _exiting;
@@ -112,6 +113,7 @@ internal static class AppWindows
             TrayMenu.Item.Separator,
             new TrayMenu.Item("打开主窗口", ShowMainWindow),
             new TrayMenu.Item("简洁模式", EnterCompact),
+            new TrayMenu.Item("检查更新", CheckForUpdates),
             new TrayMenu.Item("设置", OpenSettings),
             TrayMenu.Item.Separator,
             new TrayMenu.Item("退出", ExitApplication),
@@ -230,10 +232,27 @@ internal static class AppWindows
                 MinHeight = 600,
                 StartPosition = WindowStartPosition.CenterOnCurrent,
             },
-            () => new SettingsWindow());
+            () => _settingsComponent = new SettingsWindow());
 
         _settings = window;
         ReactorApp.WindowClosed += OnWindowClosed;
+    }
+
+    /// <summary>
+    /// 托盘菜单的「检查更新」：设置窗口开着就在它里面直接查，没开就先打开设置窗口再查
+    /// （设置页的「关于与更新」卡片是唯一显示结果的地方）。
+    /// </summary>
+    public static void CheckForUpdates()
+    {
+        if (_settings is { } existing)
+        {
+            existing.Activate();
+            _settingsComponent?.StartUpdateCheck();
+            return;
+        }
+
+        SettingsWindow.RequestUpdateCheck();
+        OpenSettings();
     }
 
     /// <summary>切到简洁模式：隐藏主窗口，显示右下角的圆形气泡。</summary>
@@ -451,6 +470,7 @@ internal static class AppWindows
         if (ReferenceEquals(window, _settings))
         {
             _settings = null;
+            _settingsComponent = null;
             ReactorApp.WindowClosed -= OnWindowClosed;
         }
     }
