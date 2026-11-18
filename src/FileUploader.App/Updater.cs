@@ -108,6 +108,9 @@ internal static class Updater
                 return new ApplyResult(false, $"替换失败，已还原原文件：{ex.Message}");
             }
 
+            // 先把单实例锁交出去：新进程马上要起来，还占着锁的话它会以为自己是"第二份"而直接退出。
+            SingleInstance.Release();
+
             var started = Process.Start(new ProcessStartInfo(current)
             {
                 UseShellExecute = true,

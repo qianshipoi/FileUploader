@@ -65,6 +65,9 @@ internal sealed class FlashDropWindow : IDisposable
     private const int WmAppQueue = 0x8000 + 34;
     private const int WmAppSpyMove = 0x8000 + 36;
 
+    /// <summary>在气泡里显示一条提示（启动进托盘时用，见 <see cref="Hint"/>）。</summary>
+    private const int WmAppHint = 0x8000 + 38;
+
     /// <summary>回归测试用：模拟「拖出去但还没松手」（只在 FU_FLASH_DEBUG=1 时生效）。</summary>
     private const int WmAppSimulateLeave = 0x8000 + 35;
 
@@ -74,6 +77,7 @@ internal sealed class FlashDropWindow : IDisposable
     private const int TimerPreview = 4;
     private const int TimerHit = 5;
     private const int TimerSpy = 6;
+    private const int TimerHint = 7;
 
     /// <summary>回归测试用：模拟「拖出去但还没松手」（只在 FU_FLASH_DEBUG=1 时生效）。</summary>
     private const int WhMouseLl = 14;
@@ -128,6 +132,12 @@ internal sealed class FlashDropWindow : IDisposable
     private volatile bool _configured = true;
     private int _pendingResult;
     private string _resultMessage = string.Empty;
+
+    /// <summary>提示气泡的副标题（为空时按「拖入即上传」显示）。</summary>
+    private string? _resultSubtitle;
+
+    private string _pendingHint = string.Empty;
+    private string? _pendingHintSubtitle;
 
     private float _opacity = DormantOpacity;
     private float _targetOpacity = DormantOpacity;
@@ -188,6 +198,22 @@ internal sealed class FlashDropWindow : IDisposable
 
     /// <summary>开发辅助：依次演示 Peek → Armed → Uploading → Done（<c>--flash-preview</c> 用）。</summary>
     public void Preview() => Post(WmAppPreview);
+
+    /// <summary>
+    /// 在气泡里显示一条提示，几秒后自动收起。
+    /// 静默启动时用一次「已在托盘运行」，免得双击 exe 之后看不到窗口、以为闪退了。
+    /// </summary>
+    public void Hint(string message, string? subtitle = null)
+    {
+        if (!IsReady || string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        _pendingHint = message;
+        _pendingHintSubtitle = subtitle;
+        Post(WmAppHint);
+    }
 
     /// <inheritdoc />
     public void Dispose()
@@ -364,6 +390,10 @@ internal sealed class FlashDropWindow : IDisposable
 
             case WmAppPreview:
                 StartPreview();
+                return IntPtr.Zero;
+
+            case WmAppHint:
+                ShowHint();
                 return IntPtr.Zero;
 
             case WmAppSimulateLeave:
@@ -691,8 +721,26 @@ internal sealed class FlashDropWindow : IDisposable
     private void Hibernate()
     {
         _afterDragLeave = false;
+        _resultSubtitle = null;
+        _pendingHint = string.Empty;
+        _pendingHintSubtitle = null;
         Interlocked.Exchange(ref _pendingResult, 0);
         SetState(FlashDropState.Dormant);
+    }
+
+    /// <summary>把排队的提示显示出来，4 秒后自己收回去。</summary>
+    private void ShowHint()
+    {
+        if (string.IsNullOrEmpty(_pendingHint))
+        {
+            return;
+        }
+
+        RefreshSnapshot();
+        _resultMessage = _pendingHint;
+        _resultSubtitle = _pendingHintSubtitle ?? "点托盘图标打开";
+        SetState(FlashDropState.Done);
+        SetTimer(_hwnd, TimerHint, 4200, IntPtr.Zero);
     }
 
     private void OnTimer(int timerId)
@@ -725,6 +773,12 @@ internal sealed class FlashDropWindow : IDisposable
 
             case TimerFlash:
                 KillTimer(_hwnd, TimerFlash);
+                Hibernate();
+                break;
+
+            case TimerHint:
+                KillTimer(_hwnd, TimerHint);
+                _resultSubtitle = null;
                 Hibernate();
                 break;
 
@@ -980,7 +1034,7 @@ internal sealed class FlashDropWindow : IDisposable
     {
         var scale = Scale();
         var state = (FlashDropState)_state;
-        var (title, subtitle, _) = FlashDropVisual.Texts(state, _configured, _count, _percent, _resultMessage);
+        var (title, subtitle, _) = FlashDropVisual.Texts(state, _configured, _count, _percent, _resultMessage, _resultSubtitle);
         var width = state == FlashDropState.Dormant
             ? FlashDropVisual.MinPillWidth
             : FlashDropVisual.MeasureWidth((float)scale, title, subtitle);
@@ -1054,7 +1108,7 @@ internal sealed class FlashDropWindow : IDisposable
             // 气泡贴着窗口右下角，多出来的左上区域就是落点余量（只在拖拽时生效）。
             var pill = new RectangleF(size.Cx - pad - pillWidth, size.Cy - pad - pillHeight, pillWidth, pillHeight);
             _pillRect = pill;
-            var (title, subtitle, icon) = FlashDropVisual.Texts(state, _configured, _count, _percent, _resultMessage);
+            var (title, subtitle, icon) = FlashDropVisual.Texts(state, _configured, _count, _percent, _resultMessage, _resultSubtitle);
 
             FlashDropVisual.DrawShadow(graphics, pill, scale, _light, new Size(size.Cx, size.Cy));
             FlashDropVisual.DrawSurface(graphics, pill, scale, _light, state);

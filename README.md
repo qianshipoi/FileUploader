@@ -32,8 +32,9 @@
 - **简洁模式（圆形气泡）**：收成右下角一个圆，拖文件上去就传，环上显示进度，传完自动复制链接并短暂显示「已复制」。主窗口的「简洁模式」按钮或 `FileUploader.exe --compact` 都能进。
 - **拖拽浮现（QQ 闪传式）**：平时完全隐形、不占位置；一开始拖文件，右下角就浮起一个半透明气泡，拖上去松手直接上传（拖的不是文件则立刻缩回），传完显示「已复制链接」后自动消失。
 - **托盘常驻**：点关闭不再退出，而是收进托盘；左键/双击托盘图标恢复主窗口，右键菜单有「打开主窗口 / 简洁模式 / 设置 / 退出」，只有点「退出」才真正结束进程。
-- **静默启动**：设置里打开「静默启动」后，双击 exe 不弹主窗口、只在托盘里待命（想用的时候点托盘图标叫回来）。还没配置存储、或把文件拖到 exe 上启动时仍会显示窗口，不会让人以为程序没启动。
+- **静默启动**：设置里打开「静默启动」后，双击 exe 不弹主窗口、只在托盘里待命（想用的时候点托盘图标叫回来），右下角会浮现一下「已在托盘运行 · 点托盘图标打开」的提示，免得被当成闪退。还没配置存储、或把文件拖到 exe 上启动时仍会显示窗口。
 - **开机自启**：设置里打开「开机自启」即写当前用户的启动项（任务管理器「启动」页可见、可关），不用管理员；和「静默启动」一起开就是开机直接进托盘。
+- **单实例**：同一份 exe 只跑一份——已经开着时再双击，会直接把已有窗口叫到前台然后自己退出，不会在托盘里堆出好几份后台进程。
 - **检查更新（手动）**：设置页「关于与更新」里点一下，读 GitHub Release 的最新版本，列出「本次更新了哪些地方」；确认后自动下载 → 校验 SHA256 → 替换当前 exe → 重启。托盘右键菜单里也有「检查更新」。
 - **并发 3 路上传**、实时进度、失败重试、取消。
 - **命令行也能用**：`FileUploader.exe a.png b.txt "D:\照片"`（或把文件/文件夹拖到 exe 图标上）启动即上传；`FileUploader.exe --settings` 直接打开设置窗口。
@@ -344,6 +345,8 @@ src/FileUploader.App/               WinUI 3 + Reactor 界面
   SettingsWindow.cs                 独立的设置窗口（存储 + 启动行为）
   StartupRegistration.cs            开机自启（HKCU Run 启动项：写入 / 删除 / 启动时校正）
   AppVersion.cs                     当前版本号（来自 csproj 的 <Version>，发版时由 tag 覆盖）
+  SingleInstance.cs                 同一份 exe 只跑一份（锁名带 exe 路径哈希，副本之间互不影响）
+  WindowForeground.cs               显示/激活窗口的 Win32 封装（含前台锁定绕法，托盘与单实例共用）
   Updater.cs                        自更新：下载 + SHA256 校验 + 替换 exe + 重启 + 失败回滚
   SettingsState.cs                  跨窗口共享配置（INotifyPropertyChanged + 防抖落盘）
   DropExpander.cs                   拖入项 → 文件列表（文件夹递归；有路径时走 System.IO 快路径）
@@ -356,6 +359,7 @@ tools/uia-history-search.ps1        历史记录搜索与「下载」保存对�
 tools/tray-activate-test.ps1       托盘激活回归：窗口被别的窗口压住时点托盘要能叫到前台
 tools/update-e2e-test.ps1          检查更新与自更新回归：本机假 feed → 真下载 → 真替换 → 真重启
 tools/update-live-test.ps1         对着已发布的 Release 跑真自更新（会真下载 ~90 MB，用便携副本）
+tools/single-instance-test.ps1     单实例激活 / 不同目录副本互不影响 / 静默启动隐藏窗口并给提示
 tools/flash-drop-test.ps1           拖拽浮现气泡回归（位置 / 命中穿透 / 落点注册 / 设置开关 / 拖选文字）
 tools/real-drag-onto-bubble.ps1     真实拖拽验证（资源管理器拖文件到气泡，ESC 取消不上传）
 docs/                               截图
@@ -398,6 +402,7 @@ docs/                               截图
 - 检查更新改成对话框后重跑整条回归（`tools/update-e2e-test.ps1`，17 项）：详情对话框列出「发现新版本 9.9.9」+ 变更条目、摘要不对时在「更新失败」对话框里说明原因且不替换、关闭后重新检查、真下载真替换真重启，全部 PASS；另外手工验证了下载中点「取消」→ 进程存活、exe 未被替换、`.part` 半成品不残留。
 - 修掉「下载的 Release 一打开就是红字 Render error `Theme resource 'ControlStrokeColorDefaultBrush' not found`」：`ThemeResource.Brush(key)` 找不到资源时是**抛异常**而不是返回 null，原来的 `?? 兜底` 根本走不到。现在统一走 `ThemeBrushes`（多级 key 兜底 + try/catch + 固定颜色兜底，取不到时写一次 crash.log），并把 `CrashLog` 的路径改成跟随便携模式的 `data\`。
 - 兜底的自测：临时把 4 处主题 key 全改成不存在的名字重新构建 → 主窗口照常渲染（10 个文本、无 Render error），同时 `crash.log` 里出现"主题资源取不到，已用兜底颜色：NopeStrokeBrush"；改回正式 key 后重新构建，虚线圈与图标颜色正常。
+- 单实例与静默启动提示的回归（`tools/single-instance-test.ps1`）：同一份 exe 启动两次 → 只有一个进程、第二次把已有窗口叫到前台并自己退出（先拿记事本当遮挡物，断言前台真的换成了本程序）；不同目录的两份副本 → 可以各跑一份（锁名带 exe 路径哈希，回归脚本能同时跑多份）；静默启动（`StartSilently=true` + 已配置）→ 主窗口保持隐藏，右下角气泡浮现「已在托盘运行 / 点托盘图标打开」（截图确认）。
 - dotnet build（Debug/Release）与 dotnet publish 均无警告无错误。
 
 ## 排查闪退

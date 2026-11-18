@@ -10,36 +10,13 @@ namespace FileUploader.App;
 /// <summary>窗口管理：主窗口、设置窗口、简洁模式（气泡）之间的切换。</summary>
 internal static class AppWindows
 {
-    private const int SwHide = 0;
-    private const int SwShowNormal = 1;
-    private const int SwRestore = 9;
+    private const int SwHide = WindowForeground.SwHide;
 
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int cmd);
 
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsIconic(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    private static extern bool BringWindowToTop(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
-
-    [DllImport("user32.dll")]
-    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
-
-    [DllImport("kernel32.dll")]
-    private static extern uint GetCurrentThreadId();
 
     private static ReactorWindow? _settings;
     private static SettingsWindow? _settingsComponent;
@@ -92,6 +69,9 @@ internal static class AppWindows
         }
 
         HideMainWindow();
+
+        // 双击 exe 之后看不到窗口很容易被当成"闪退了"，这里在拖拽浮现气泡里提示一句（几秒后自动消失）。
+        DragFlashController.ShowHint("已在托盘运行", "点托盘图标打开");
     }
 
     /// <summary>闪现气泡上的点击/右键：把主窗口叫回来。</summary>
@@ -395,61 +375,10 @@ internal static class AppWindows
         _hideSequence++;
 
         var handle = WinRT.Interop.WindowNative.GetWindowHandle(main.NativeWindow);
-        ShowWindow(handle, IsIconic(handle) ? SwRestore : SwShowNormal);
 
-        // 先让 Reactor/WinUI 自己走一遍（同步它内部的可见性/激活状态），再用 Win32 强制提到前台。
+        // 先让 Reactor/WinUI 自己走一遍（同步它内部的可见性/激活状态），再用 Win32 强制显示+提到前台。
         main.Activate();
-        ForceForeground(handle);
-    }
-
-    /// <summary>
-    /// 把窗口真正提到前台。
-    /// <para>
-    /// 踩过的坑：点托盘图标时，用户输入是发给 shell（explorer）的，系统不认为我们进程拿到了"最后一次输入"，
-    /// 于是 <c>SetForegroundWindow</c> 被前台锁定规则静默拒绝 —— 返回 false、窗口纹丝不动，
-    /// 表现就是「窗口压在别的窗口下面时点托盘没反应」（实测：普通 SetForegroundWindow = false，
-    /// 临时置顶再取消也 = false）。Win32 的标准解法是先 <c>AttachThreadInput</c> 挂到当前前台线程上，
-    /// 让两者的输入队列合并，再 BringWindowToTop + SetForegroundWindow（实测 = true）。
-    /// </para>
-    /// </summary>
-    private static void ForceForeground(IntPtr handle)
-    {
-        if (SetForegroundWindow(handle) || GetForegroundWindow() == handle)
-        {
-            return;
-        }
-
-        var foreground = GetForegroundWindow();
-        var foregroundThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, IntPtr.Zero);
-        var currentThread = GetCurrentThreadId();
-        var attached = false;
-        try
-        {
-            if (foregroundThread != 0 && foregroundThread != currentThread)
-            {
-                attached = AttachThreadInput(currentThread, foregroundThread, true);
-            }
-
-            BringWindowToTop(handle);
-            SetForegroundWindow(handle);
-        }
-        catch (Exception)
-        {
-            // 纯 Win32 调用不该抛异常，但绝不能让"叫回窗口"这一步把程序搞崩。
-        }
-        finally
-        {
-            if (attached)
-            {
-                AttachThreadInput(currentThread, foregroundThread, false);
-            }
-        }
-
-        if (GetForegroundWindow() != handle)
-        {
-            CrashLog.Write("托盘激活失败：窗口没能拿到前台", new InvalidOperationException(
-                $"hwnd=0x{handle.ToInt64():X} foreground=0x{GetForegroundWindow().ToInt64():X} attached={attached}"));
-        }
+        WindowForeground.ShowAndActivate(handle);
     }
 
     /// <summary>气泡的交互回调在原生消息线程上触发，统一切回 UI 线程。</summary>

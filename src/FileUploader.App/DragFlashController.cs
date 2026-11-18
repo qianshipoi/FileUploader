@@ -101,6 +101,12 @@ internal static class DragFlashController
     /// <summary>开发辅助：走一遍 Peek → Armed → Uploading → Done。</summary>
     public static void Preview() => _window?.Preview();
 
+    /// <summary>
+    /// 在右下角气泡里显示一条提示（静默启动时用）。
+    /// 气泡功能被关掉时这里什么也不做 —— 那种情况下用户本来就知道程序在托盘。
+    /// </summary>
+    public static void ShowHint(string message, string? subtitle = null) => _window?.Hint(message, subtitle);
+
     /// <summary>进程退出时彻底收摊（解订阅 + 关窗口）。</summary>
     public static void Shutdown()
     {

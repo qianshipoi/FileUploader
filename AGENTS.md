@@ -102,6 +102,7 @@ dotnet run --project tools\FileUploader.Verify -c Release
 | `tray-activate-test.ps1` | 托盘激活：窗口被别的窗口压住时点托盘要能把它叫到前台（用 `--bring-preview` 触发同一条路径） |
 | `update-e2e-test.ps1` | 检查更新与自更新：本机假 feed（`FU_UPDATE_FEED`）→ 错误摘要必须拒绝替换 → 真下载真替换真重启 |
 | `update-live-test.ps1` | 对着**已发布**的 Release 跑真自更新（会真下载 ~90 MB 并替换指定副本里的 exe，用前先复制一份便携副本） |
+| `single-instance-test.ps1` | 单实例激活（第二次启动把已有窗口叫到前台）/ 不同目录副本互不影响 / 静默启动隐藏窗口并给「已在托盘运行」提示 |
 | `uia-header-gear.ps1` / `uia-click.ps1` / `uia-pick.ps1` / `uia-invoke-test.ps1` | 主窗口控件交互 |
 | `compact-race-test.ps1` | 简洁模式快速进出、气泡与主窗口竞态 |
 | `bubble-placement-test.ps1` | 气泡拖拽与位置记忆 |

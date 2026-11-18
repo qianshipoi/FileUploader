@@ -70,7 +70,7 @@ internal static class FlashDropVisual
 
     /// <summary>按状态给文案。</summary>
     public static (string Title, string Subtitle, IconKind Icon) Texts(
-        FlashDropState state, bool configured, int count, int percent, string resultMessage)
+        FlashDropState state, bool configured, int count, int percent, string resultMessage, string? doneSubtitle = null)
     {
         return state switch
         {
@@ -79,7 +79,7 @@ internal static class FlashDropVisual
                 : ("还没配置存储", string.Empty, IconKind.Alert),
             FlashDropState.Armed => ("松手即上传", $"{Math.Max(1, count)} 个文件", IconKind.Upload),
             FlashDropState.Uploading => ($"正在上传 {Math.Clamp(percent, 0, 100)}%", $"{Math.Max(1, count)} 个文件", IconKind.Upload),
-            FlashDropState.Done => (resultMessage.Length > 0 ? resultMessage : "已复制链接", "拖入即上传", IconKind.Check),
+            FlashDropState.Done => (resultMessage.Length > 0 ? resultMessage : "已复制链接", doneSubtitle ?? "拖入即上传", IconKind.Check),
             FlashDropState.Failed => (resultMessage.Length > 0 ? resultMessage : "上传失败", "点一下看详情", IconKind.Alert),
             _ => (string.Empty, string.Empty, IconKind.Upload),
         };

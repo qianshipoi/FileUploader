@@ -37,6 +37,18 @@ public static class Program
     {
         CrashLog.Install();
         ApplyImportedSettings();
+
+        // 单实例：同一份 exe 已经在跑，就把它的窗口叫到前台，然后自己退出。
+        // 不做这一步的话，双击两次会在托盘里堆出两份后台进程，主窗口不出现 —— 看起来就像"闪退了"。
+        if (!SingleInstance.TryAcquire())
+        {
+            if (SingleInstance.ActivateExisting())
+            {
+                return;
+            }
+
+            // 找不到对方的窗口（可能还在启动、或者卡住了）：照常启动，别把用户挡在门外。
+        }
         StartupFiles = ParseFiles(args);
         OpenSettingsOnStartup = args.Any(a => string.Equals(a.Trim(), "--settings", StringComparison.OrdinalIgnoreCase));
         OpenCompactOnStartup = args.Any(a => string.Equals(a.Trim(), "--compact", StringComparison.OrdinalIgnoreCase));
