@@ -61,9 +61,10 @@ $texts = @()
 for ($i = 0; $i -lt 120; $i++) {
     Start-Sleep -Milliseconds 250
     $texts = Get-Texts $settings
-    if ($texts -match '发现新版本|最新版本|检查失败') { break }
+    # 注意别匹配到卡片上的「正在向 GitHub 查询最新版本…」，那还是查询中
+    if ($texts -match '发现新版本|就是最新版本|检查失败') { break }
 }
-$header = $texts | Where-Object { $_ -match '发现新版本|最新版本|检查失败' } | Select-Object -First 1
+$header = $texts | Where-Object { $_ -match '发现新版本|就是最新版本|检查失败' } | Select-Object -First 1
 Write-Output ("检查结果: '" + $header + "'")
 Write-Output '--- 列出的变更 ---'
 $texts | Where-Object { $_ -like '· *' } | Select-Object -First 8 | ForEach-Object { "  $_" }
