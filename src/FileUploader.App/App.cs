@@ -45,6 +45,8 @@ public static class Program
 
         // 主窗口默认居中显示（不指定 StartPosition 时是"系统按历史位置决定"，实测会贴在左上角）。
         // CenterOnCurrent = 居中到鼠标所在的那块显示器，多屏下比固定居中到主屏更符合直觉。
+        RegisterDialogElementType();
+
         ReactorApp.Run<UploadApp>(
             new WindowSpec
             {
@@ -56,6 +58,18 @@ public static class Program
             },
             null);
     }
+
+    /// <summary>
+    /// Reactor 的内置元素是「调一次工厂才自我注册」的：直接 <c>new ContentDialogElement(...)</c>
+    /// 会抛 <c>InvalidOperationException: No handler is registered for element type</c>，
+    /// 而且一旦在 Render 里抛，整个设置页会变成空白页面。
+    /// <para>
+    /// 设置页的更新对话框需要设置 init-only 的 <c>CloseButtonText</c> / <c>IsOpen</c>，只能用对象
+    /// 初始化器 <c>new</c> 出来，所以启动时先调一次工厂把类型登记上（工厂的返回值用不上）。
+    /// </para>
+    /// </summary>
+    private static void RegisterDialogElementType() =>
+        _ = Microsoft.UI.Reactor.Factories.ContentDialog("warmup", Microsoft.UI.Reactor.Factories.Empty(), "OK");
 
     /// <summary>
     /// 启动时检查 exe 同目录有没有导出的配置：有就导入到本机配置（密钥重新 DPAPI 加密）。

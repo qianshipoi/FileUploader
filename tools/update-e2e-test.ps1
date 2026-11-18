@@ -223,6 +223,14 @@ try {
     Check '摘要不匹配时报校验失败' ([bool]$mismatch) ("'" + $mismatch + "'")
     Check '摘要不匹配时不替换 exe' (((Get-FileHash $appExe -Algorithm SHA256).Hash.ToLowerInvariant()) -eq $originalSha) ''
 
+    # 关掉「更新失败」对话框（模态），否则下一轮的结果对话框弹不出来。
+    $closeButton = Find-Button $settings '关闭'
+    if ($closeButton) {
+        $closeButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Write-Output '已关闭「更新失败」对话框'
+        Start-Sleep -Milliseconds 800
+    }
+
     # --- 4c. 换成正确摘要，重来一次 ---
     Write-Release $fakeSha
     $checkButton = Find-Button $settings '检查更新'
