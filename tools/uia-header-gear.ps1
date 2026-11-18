@@ -9,8 +9,8 @@ $CT = [System.Windows.Automation.ControlType]
 
 # "设置" without Chinese literals (safe for any file encoding)
 $settingsName = [string]([char]0x8BBE) + [string]([char]0x7F6E)
-# "存储配置"
-$windowName = [string]([char]0x5B58) + [string]([char]0x50A8) + [string]([char]0x914D) + [string]([char]0x7F6E)
+# "设置"
+$windowName = [string]([char]0x8BBE) + [string]([char]0x7F6E)
 
 $root = $AE::RootElement
 $proc = Get-Process -Name FileUploader -ErrorAction Stop | Select-Object -First 1
@@ -31,7 +31,8 @@ $buttons = $main.FindAll($TS::Descendants, $buttonCond)
 Write-Output "buttons in main window: $($buttons.Count)"
 foreach ($b in $buttons) {
     $r = $b.Current.BoundingRectangle
-    Write-Output ("  name='{0}' rect={1},{2} {3}x{4}" -f $b.Current.Name, [int]$r.X, [int]$r.Y, [int]$r.Width, [int]$r.Height)
+    # 有些元素（被裁剪/未布局）的 BoundingRectangle 是 Infinity，强转 int 会直接抛错，所以按 double 打印
+    Write-Output ("  name='{0}' rect={1},{2} {3}x{4}" -f $b.Current.Name, [double]$r.X, [double]$r.Y, [double]$r.Width, [double]$r.Height)
 }
 
 $target = $null

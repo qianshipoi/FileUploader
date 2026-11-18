@@ -55,6 +55,22 @@ internal static class AppWindows
     /// <summary>启动「拖拽浮现」上传气泡：拖文件到屏幕右下角就能直接传，不占位置。</summary>
     public static void EnsureDragFlash() => DragFlashController.Apply();
 
+    /// <summary>
+    /// 「静默启动」：托盘先就位，再把刚露头的主窗口收起来。
+    /// 三种情况照常显示主窗口 —— 托盘建不出来（否则程序会像根本没启动）、
+    /// 还没配置存储（先让用户看到配置引导）、命令行带了要上传的文件（用户需要看进度）。
+    /// </summary>
+    public static void ApplyStartupVisibility()
+    {
+        var settings = SettingsState.Current.Value;
+        if (!settings.StartSilently || !CanMinimizeToTray || !settings.IsConfigured || Program.StartupFiles.Count > 0)
+        {
+            return;
+        }
+
+        HideMainWindow();
+    }
+
     /// <summary>闪现气泡上的点击/右键：把主窗口叫回来。</summary>
     internal static void ShowMainFromFlash() => RunOnUi(ShowMainWindow);
 
@@ -179,10 +195,10 @@ internal static class AppWindows
         var window = ReactorApp.OpenWindow(
             new WindowSpec
             {
-                Title = "存储配置",
-                Width = 720,
-                Height = 800,
-                MinWidth = 620,
+                Title = "设置",
+                Width = 780,
+                Height = 840,
+                MinWidth = 640,
                 MinHeight = 600,
                 StartPosition = WindowStartPosition.CenterOnCurrent,
             },
@@ -233,7 +249,10 @@ internal static class AppWindows
         var sequence = ++_hideSequence;
         ShowWindow(handle, SwHide);
 
-        foreach (var delay in new[] { 250, 700, 1500 })
+        // Reactor 会在内容挂载后再显示一次窗口，所以要多收几次。
+        // 第一档给得很小：静默启动时这次补隐藏就是"闪一下"的长度（实测 Reactor 显示窗口
+        // 就发生在调用本方法之后的一瞬间），后面几档兜底慢机器。
+        foreach (var delay in new[] { 60, 120, 250, 700, 1500 })
         {
             HideMainWindowAfter(handle, sequence, delay);
         }

@@ -9,7 +9,7 @@ $CT = [System.Windows.Automation.ControlType]
 
 function S([int[]]$codes) { ($codes | ForEach-Object { [string][char]$_ }) -join "" }
 
-$winName = S 0x5B58, 0x50A8, 0x914D, 0x7F6E          # 存储配置
+$winName = S 0x8BBE, 0x7F6E                      # 设置
 $btnName = S 0x6D4B, 0x8BD5, 0x8FDE, 0x63A5          # 测试连接
 
 $proc = Get-Process -Name FileUploader -ErrorAction Stop | Select-Object -First 1

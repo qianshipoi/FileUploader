@@ -17,6 +17,9 @@ public sealed partial class UploadApp
         AppWindows.EnsureTray();
         AppWindows.EnsureDragFlash();
 
+        // 静默启动：主窗口在挂载后才会被 Reactor 显示出来，所以隐藏带几次延迟收敛。
+        AppWindows.ApplyStartupVisibility();
+
         // 开发辅助：--flash-preview 走一遍「拖拽浮现」气泡的四个状态，方便截图与回归。
         if (Program.FlashPreviewOnStartup)
         {

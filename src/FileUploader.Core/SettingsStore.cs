@@ -123,6 +123,9 @@ public static class SettingsStore
         /// <summary>右下角拖拽浮现上传气泡（旧配置文件里没有这个字段时按开启处理）。</summary>
         public bool FlashDropEnabled { get; set; } = true;
 
+        /// <summary>静默启动：不弹主窗口、只留托盘（旧配置文件里没有这个字段时按关闭处理）。</summary>
+        public bool StartSilently { get; set; }
+
         public static SettingsDto FromSettings(AppSettings s) => new()
         {
             Protocol = (int)s.Protocol,
@@ -141,6 +144,7 @@ public static class SettingsStore
             PublicReadObject = s.PublicReadObject,
             AutoCopyUrl = s.AutoCopyUrl,
             FlashDropEnabled = s.FlashDropEnabled,
+            StartSilently = s.StartSilently,
         };
 
         public AppSettings ToSettings(string secret) => new()
@@ -161,6 +165,7 @@ public static class SettingsStore
             PublicReadObject = PublicReadObject,
             AutoCopyUrl = AutoCopyUrl,
             FlashDropEnabled = FlashDropEnabled,
+            StartSilently = StartSilently,
         };
     }
 }

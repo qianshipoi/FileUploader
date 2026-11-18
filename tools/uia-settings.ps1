@@ -1,10 +1,11 @@
-﻿param(
-    [string]$WindowTitle = "存储配置",
+param(
+    [string]$WindowTitle = "设置",
     [string]$Endpoint = "",
     [string]$Bucket = "",
     [string]$AccessKeyId = "",
     [string]$Protocol = "",
     [switch]$ToggleHttps,
+    [switch]$ToggleStartSilently,
     [switch]$ClickSave,
     [switch]$ClickClose,
     [switch]$DumpTree
@@ -95,6 +96,8 @@ if (-not [string]::IsNullOrEmpty($Protocol)) {
 }
 
 if ($ToggleHttps) {
+    # 新布局把「使用 HTTPS」放在「存储服务」卡片里，不再折叠在「高级设置」下；
+    # 旧版本留下的折叠头仍然兼容处理（找得到就展开）。
     $advanced = Find-Button "高级设置"
     if ($advanced) {
         try {
@@ -120,6 +123,18 @@ if ($ToggleHttps) {
         }
     }
     if (-not $toggled) { throw "https checkbox not found" }
+}
+
+if ($ToggleStartSilently) {
+    $toggleCondition = New-Object System.Windows.Automation.PropertyCondition($AutomationElement::ControlTypeProperty, $ControlType::Button)
+    $toggles = $window.FindAll($TreeScope::Descendants, $toggleCondition)
+    $target = $null
+    foreach ($e in $toggles) {
+        if ($e.Current.Name -eq "静默启动") { $target = $e; break }
+    }
+    if (-not $target) { throw "silent-start toggle not found" }
+    $target.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Write-Output "toggled: 静默启动"
 }
 
 if ($ClickSave) {

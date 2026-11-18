@@ -11,7 +11,7 @@ using static Microsoft.UI.Reactor.Factories;
 namespace FileUploader.App;
 
 /// <summary>
-/// 独立的「存储配置」窗口。修改立即生效并自动保存，主窗口实时同步。
+/// 独立的设置窗口（存储 + 启动行为）。修改立即生效并自动保存，主窗口实时同步。
 /// </summary>
 public sealed class SettingsWindow : Component
 {
@@ -57,9 +57,9 @@ public sealed class SettingsWindow : Component
                 columns: [GridSize.Star()],
                 children:
                 [
-                    BuildHeader().Grid(row: 0).Margin(0, 0, 0, 12),
-                    ScrollView(VStack(12, BuildForm())).Grid(row: 1),
-                    BuildFooter(saveState).Grid(row: 2).Margin(0, 12, 0, 0),
+                    BuildHeader().Grid(row: 0).Margin(0, 0, 0, 16),
+                    ScrollView(VStack(16, BuildForm())).Grid(row: 1).Margin(0, 0, 0, 12),
+                    BuildFooter(saveState).Grid(row: 2).Margin(0, 4, 0, 0),
                 ])
             .Padding(20)
             .Background(Theme.SolidBackground);
@@ -76,7 +76,7 @@ public sealed class SettingsWindow : Component
 
         return VStack(
             4,
-            TextBlock("存储配置").FontSize(22).SemiBold(),
+            TextBlock("设置").FontSize(22).SemiBold(),
             TextBlock(_settings.IsConfigured ? string.Join(" · ", subtitle) : "填写 Endpoint、桶名和密钥后即可拖拽上传")
                 .FontSize(12)
                 .Foreground(Theme.SecondaryText),
@@ -103,78 +103,170 @@ public sealed class SettingsWindow : Component
                 : Empty());
     }
 
-    private Element BuildForm()
-    {
-        var protocolBox = VStack(
-            4,
-            TextBlock("协议").FontSize(12).Foreground(Theme.SecondaryText),
-            ComboBox(["阿里云 OSS（V1 签名）", "S3 兼容（SigV4）"], (int)_settings.Protocol, OnProtocolChanged));
-
-        var urlModeBox = VStack(
-            4,
-            TextBlock("链接类型").FontSize(12).Foreground(Theme.SecondaryText),
-            ComboBox(
-                ["签名链接（私有桶可直接下载，会过期）", "直链（需桶或对象公共读）"],
-                (int)_settings.UrlMode,
-                OnUrlModeChanged),
-            TextBlock("签名有效期最长 7 天（阿里云与 S3 的一致限制），到期自动失效；每次复制都会重新生成。")
-                .FontSize(11)
-                .Foreground(Theme.TertiaryText)
-                .TextWrapping());
-
-        var expireBox = _settings.UrlMode == UrlMode.Signed
-#pragma warning disable REACTOR_A11Y_003 // 标题通过工厂参数传入，分析器识别不到
-            ? NumberBox(_settings.SignedUrlExpireDays, OnExpireDaysChanged, "签名有效期（天）")
-                .Range(1, 7)
-                .SpinButtons()
-#pragma warning restore REACTOR_A11Y_003
-            : Empty();
-
-        return VStack(
-            12,
-            protocolBox,
-            TextBox(_settings.Endpoint, value => SetField(s => s with { Endpoint = value }))
-                .Header("Endpoint")
-                .PlaceholderText("oss-cn-hangzhou.aliyuncs.com"),
-            TextBox(_settings.Bucket, value => SetField(s => s with { Bucket = value }))
-                .Header("桶名（Bucket）")
-                .PlaceholderText("my-bucket"),
-            TextBox(_settings.AccessKeyId, value => SetField(s => s with { AccessKeyId = value }))
-                .Header("AccessKey ID")
-                .PlaceholderText("LTAI..."),
-            PasswordBox(_settings.AccessKeySecret, value => SetField(s => s with { AccessKeySecret = value }), "AccessKey Secret")
-                .Header("AccessKey Secret"),
-            urlModeBox,
-            expireBox,
-            Expander(
-                    "高级设置",
-                VStack(
-                    10,
-                    TextBox(_settings.KeyPrefix, value => SetField(s => s with { KeyPrefix = value }))
-                        .Header("对象键前缀（可选）")
-                        .PlaceholderText("images"),
-                    TextBox(_settings.PublicBaseUrl, value => SetField(s => s with { PublicBaseUrl = value }))
-                        .Header("自定义域名（可选，仅直链生效）")
-                        .PlaceholderText("https://cdn.example.com"),
-                    TextBox(_settings.Region, value => SetField(s => s with { Region = value }))
-                        .Header("Region（SigV4 用）")
-                        .PlaceholderText("us-east-1"),
-                    CheckBox((bool?)_settings.UseDateFolder, value => SetField(s => s with { UseDateFolder = value }), "对象键按日期分组（yyyy/MM/dd）"),
-                    CheckBox((bool?)_settings.PathStyle, value => SetField(s => s with { PathStyle = value }), "路径风格访问（endpoint/bucket/key）"),
-                    CheckBox((bool?)_settings.UseHttps, value => SetField(s => s with { UseHttps = value }), "使用 HTTPS"),
-                    _settings.UrlMode == UrlMode.Direct
-                        ? CheckBox((bool?)_settings.PublicReadObject, value => SetField(s => s with { PublicReadObject = value }), "上传时把对象设为公共读（直链需要）")
-                        : Empty(),
-                    CheckBox((bool?)_settings.AutoCopyUrl, value => SetField(s => s with { AutoCopyUrl = value }), "上传成功后自动复制链接"),
-                    CheckBox((bool?)_settings.FlashDropEnabled, value => SetField(s => s with { FlashDropEnabled = value }), "右下角拖拽浮现上传气泡（拖文件到屏幕右下角即上传）")))
-                .HAlign(HorizontalAlignment.Stretch)
-                .HorizontalContentAlignment(HorizontalAlignment.Stretch),
+    /// <summary>
+    /// 三张卡片按「连接 → 上传与链接 → 启动与托盘」排：常用的在上、少用的不再藏进折叠区，
+    /// 相关字段两列并排，一屏内能看完（原来一长串单列要滚动才能看到高级设置）。
+    /// </summary>
+    private Element BuildForm() =>
+        VStack(
+            16,
+            BuildStorageCard(),
+            BuildLinkCard(),
+            BuildBehaviorCard(),
             TextBlock($"密钥用 Windows DPAPI 加密后保存在 {SettingsStore.FilePath}，仅当前 Windows 账户可解密。" +
                       (AppPaths.IsPortable ? "（便携模式：配置随 exe 所在目录）" : string.Empty))
                 .FontSize(11)
                 .Foreground(Theme.TertiaryText)
                 .TextWrapping());
+
+    private Element BuildStorageCard()
+    {
+        var httpsBox = CheckBox((bool?)_settings.UseHttps, value => SetField(s => s with { UseHttps = value }), "使用 HTTPS");
+
+        var pathStyleBox = CheckBox(
+            (bool?)_settings.PathStyle,
+            value => SetField(s => s with { PathStyle = value }),
+            "路径风格访问（endpoint/bucket/key）");
+
+        // Region 只对 SigV4 有意义，选阿里云 V1 签名时不显示，少一个要理解的字段。
+        var regionRow = _settings.Protocol == StorageProtocol.S3Compatible
+            ? Pair(
+                TextBox(_settings.Region, value => SetField(s => s with { Region = value }))
+                    .Header("Region（SigV4 用）")
+                    .PlaceholderText("us-east-1"),
+                pathStyleBox.VAlign(VerticalAlignment.Bottom).Margin(0, 0, 0, 8))
+            : pathStyleBox.VAlign(VerticalAlignment.Center);
+
+        return Section(
+            "存储服务",
+            "Endpoint 与桶名决定文件传到哪里；密钥只在本机加密保存。",
+            VStack(
+                12,
+                Pair(
+                    ComboBox(["阿里云 OSS（V1 签名）", "S3 兼容（SigV4）"], (int)_settings.Protocol, OnProtocolChanged).Header("协议"),
+                    httpsBox.VAlign(VerticalAlignment.Bottom).Margin(0, 0, 0, 8)),
+                TextBox(_settings.Endpoint, value => SetField(s => s with { Endpoint = value }))
+                    .Header("Endpoint")
+                    .PlaceholderText("oss-cn-hangzhou.aliyuncs.com"),
+                Pair(
+                    TextBox(_settings.Bucket, value => SetField(s => s with { Bucket = value }))
+                        .Header("桶名（Bucket）")
+                        .PlaceholderText("my-bucket"),
+                    TextBox(_settings.AccessKeyId, value => SetField(s => s with { AccessKeyId = value }))
+                        .Header("AccessKey ID")
+                        .PlaceholderText("LTAI...")),
+                PasswordBox(_settings.AccessKeySecret, value => SetField(s => s with { AccessKeySecret = value }), "AccessKey Secret")
+                    .Header("AccessKey Secret"),
+                regionRow));
     }
+
+    private Element BuildLinkCard()
+    {
+        var expireRow = _settings.UrlMode == UrlMode.Signed
+#pragma warning disable REACTOR_A11Y_003 // 标题通过工厂参数传入，分析器识别不到
+            ? NumberBox(_settings.SignedUrlExpireDays, OnExpireDaysChanged, "签名有效期（天）")
+                .Range(1, ObjectUrlBuilder.MaxExpireDays)
+                .SpinButtons()
+#pragma warning restore REACTOR_A11Y_003
+            : Empty();
+
+        var customDomainRow = _settings.UrlMode == UrlMode.Direct
+            ? TextBox(_settings.PublicBaseUrl, value => SetField(s => s with { PublicBaseUrl = value }))
+                .Header("自定义域名（可选）")
+                .PlaceholderText("https://cdn.example.com")
+            : Empty();
+
+        var keyPrefixRow = TextBox(_settings.KeyPrefix, value => SetField(s => s with { KeyPrefix = value }))
+            .Header("对象键前缀（可选）")
+            .PlaceholderText("images");
+
+        var urlModeCombo = ComboBox(
+                ["签名链接（私有桶可直接下载，会过期）", "直链（需桶或对象公共读）"],
+                (int)_settings.UrlMode,
+                OnUrlModeChanged)
+            .Header("链接类型");
+
+        return Section(
+            "上传与链接",
+            "对象键决定文件在桶里的位置，链接类型决定复制出来的是签名链接还是直链。",
+            VStack(
+                12,
+                // 只在该选项真的存在时并排：否则右半列留空，看着像少了东西。
+                _settings.UrlMode == UrlMode.Signed ? Pair(urlModeCombo, expireRow) : urlModeCombo,
+                // 直链模式没有签名，这段说明就没意义了。
+                _settings.UrlMode == UrlMode.Signed
+                    ? TextBlock("签名有效期最长 7 天（阿里云与 S3 的一致限制），到期自动失效；每次复制都会重新生成。")
+                        .FontSize(11)
+                        .Foreground(Theme.TertiaryText)
+                        .TextWrapping()
+                    : Empty(),
+                _settings.UrlMode == UrlMode.Direct ? Pair(keyPrefixRow, customDomainRow) : keyPrefixRow,
+                Pair(
+                    CheckBox((bool?)_settings.AutoCopyUrl, value => SetField(s => s with { AutoCopyUrl = value }), "上传成功后自动复制链接"),
+                    CheckBox((bool?)_settings.UseDateFolder, value => SetField(s => s with { UseDateFolder = value }), "对象键按日期分组（yyyy/MM/dd）")),
+                _settings.UrlMode == UrlMode.Direct
+                    ? CheckBox((bool?)_settings.PublicReadObject, value => SetField(s => s with { PublicReadObject = value }), "上传时把对象设为公共读（直链需要）")
+                    : Empty()));
+    }
+
+    private Element BuildBehaviorCard() =>
+        Section(
+            "启动与托盘",
+            "关掉主窗口只是收进托盘，只有托盘菜单里的「退出」才真正结束进程。",
+            VStack(
+                4,
+                ToggleRow(
+                    "静默启动",
+                    "打开程序时不弹主窗口，只在托盘里待命；点托盘图标随时叫回来。下次启动生效。",
+                    _settings.StartSilently,
+                    value => SetField(s => s with { StartSilently = value })),
+                ToggleRow(
+                    "右下角拖拽浮现上传气泡",
+                    "拖文件到屏幕右下角就浮出气泡，松手即上传；关掉后不再创建那个隐形窗口，也不装拖拽探测器。",
+                    _settings.FlashDropEnabled,
+                    value => SetField(s => s with { FlashDropEnabled = value }))));
+
+    /// <summary>一张卡片：卡片标题 + 一句说明 + 内容（间距比卡片之间更紧）。</summary>
+    private static Element Section(string title, string description, Element content) =>
+        Card(
+            VStack(
+                12,
+                VStack(
+                    2,
+                    TextBlock(title).FontSize(15).SemiBold(),
+                    TextBlock(description).FontSize(12).Foreground(Theme.SecondaryText).TextWrapping()),
+                content));
+
+    /// <summary>两列等宽并排（窄窗口下也比单列省滚动）。</summary>
+    private static Element Pair(Element left, Element right) =>
+        Grid(
+            columns: [GridSize.Star(), GridSize.Star()],
+            rows: [GridSize.Auto],
+            children:
+            [
+                left.Grid(column: 0).Margin(0, 0, 12, 0),
+                right.Grid(column: 1),
+            ]);
+
+    /// <summary>设置页里最常见的开关行：左边标题 + 说明，右边一个开关。</summary>
+    private static Element ToggleRow(string title, string description, bool isOn, Action<bool> onChanged) =>
+        Grid(
+                columns: [GridSize.Star(), GridSize.Auto],
+                rows: [GridSize.Auto],
+                children:
+                [
+                    VStack(
+                            2,
+                            TextBlock(title).FontSize(13),
+                            TextBlock(description).FontSize(11).Foreground(Theme.TertiaryText).TextWrapping())
+                        .Grid(column: 0)
+                        .Margin(0, 0, 12, 0)
+                        .VAlign(VerticalAlignment.Center),
+                    ToggleSwitch(isOn, onChanged, string.Empty, string.Empty)
+                        .AutomationName(title)
+                        .Grid(column: 1),
+                ])
+            .Margin(0, 8, 0, 8);
 
     private void OnUrlModeChanged(int index) =>
         SetField(s => s with { UrlMode = index == 1 ? UrlMode.Direct : UrlMode.Signed });

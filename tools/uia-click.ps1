@@ -1,5 +1,5 @@
-﻿param(
-    [string]$WindowTitle = "存储配置",
+param(
+    [string]$WindowTitle = "设置",
     [Parameter(Mandatory = $true)][string]$ButtonName
 )
 

@@ -155,6 +155,7 @@ public static class SettingsExchange
         PublicReadObject = settings.PublicReadObject,
         AutoCopyUrl = settings.AutoCopyUrl,
         FlashDropEnabled = settings.FlashDropEnabled,
+        StartSilently = settings.StartSilently,
     };
 
     private sealed class ExportDto
@@ -196,6 +197,9 @@ public static class SettingsExchange
         /// <summary>右下角拖拽浮现上传气泡（旧导出文件没有这个字段时按开启处理）。</summary>
         public bool FlashDropEnabled { get; set; } = true;
 
+        /// <summary>静默启动：不弹主窗口、只留托盘（旧导出文件里没有这个字段时按关闭处理）。</summary>
+        public bool StartSilently { get; set; }
+
         public AppSettings ToSettings() => new()
         {
             Protocol = Protocol == (int)StorageProtocol.S3Compatible ? StorageProtocol.S3Compatible : StorageProtocol.AliyunOss,
@@ -214,6 +218,7 @@ public static class SettingsExchange
             PublicReadObject = PublicReadObject,
             AutoCopyUrl = AutoCopyUrl,
             FlashDropEnabled = FlashDropEnabled,
+            StartSilently = StartSilently,
         };
     }
 }

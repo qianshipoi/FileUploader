@@ -1,7 +1,7 @@
 # ASCII-only helper: capture N frames of a window (CopyFromScreen) while optionally invoking a UIA script.
 param(
     [string]$ProcessName = "FileUploader",
-    [string]$TitleCodes = "5B58,50A8,914D,7F6E",   # 存储配置
+    [string]$TitleCodes = "8BBE,7F6E",   # 设置
     [int]$Frames = 10,
     [int]$IntervalMs = 150,
     [string]$InvokeScript = "",

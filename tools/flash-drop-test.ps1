@@ -180,36 +180,33 @@ $outDir = Split-Path -Parent (Resolve-Path $exe).Path
 $portableMarker = Join-Path $outDir "portable.txt"
 $dataDir = Join-Path $outDir "data"
 $settingsFile = Join-Path $dataDir "settings.json"
-$boxName = '右下角拖拽浮现上传气泡（拖文件到屏幕右下角即上传）'
+$boxName = '右下角拖拽浮现上传气泡'
 
 function Get-SettingsWindow {
     $proc = Get-Process -Name FileUploader -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $proc) { return $null }
     $pidCond = New-Object System.Windows.Automation.PropertyCondition($AE::ProcessIdProperty, $proc.Id)
     foreach ($w in $AE::RootElement.FindAll($TS::Children, $pidCond)) {
-        if ($w.Current.Name -eq '存储配置') { return $w }
+        if ($w.Current.Name -eq '设置') { return $w }
     }
     return $null
 }
 
-function Open-Advanced([object]$win) {
-    $btn = $win.FindFirst($TS::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, '高级设置')))
-    if ($btn) {
-        try { $btn.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand() } catch { }
-        Start-Sleep -Milliseconds 500
-    }
-}
-
 function Get-FlashBox([object]$win) {
-    return $win.FindFirst($TS::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $boxName)))
+    # 卡片里的标题文本和开关的 AutomationName 同名，这里必须限定成支持 Toggle 模式的 Button（ToggleSwitch），
+    # 否则会先抓到标题 TextBlock，GetCurrentPattern(TogglePattern) 直接抛「不支持的模式」。
+    $cond = New-Object System.Windows.Automation.AndCondition(
+        (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $boxName)),
+        (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)),
+        (New-Object System.Windows.Automation.PropertyCondition($AE::IsTogglePatternAvailableProperty, $true)))
+    return $win.FindFirst($TS::Descendants, $cond)
 }
 
-# 每次切换后 Reactor 会重建元素、Expander 也会收起来，所以每次都重新找一遍
+# 每次切换后 Reactor 会重建元素，所以每次都重新找一遍
 function Set-FlashToggle([string]$want) {
     for ($i = 0; $i -lt 6; $i++) {
         $win = Get-SettingsWindow
         if (-not $win) { return $false }
-        Open-Advanced $win
         $box = Get-FlashBox $win
         if (-not $box) { continue }
         $state = $box.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState.ToString()

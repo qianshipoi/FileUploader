@@ -1,7 +1,7 @@
-﻿# 托盘菜单回归（不需要鼠标、不截图，锁屏/被遮挡也能跑）：
+# 托盘菜单回归（不需要鼠标、不截图，锁屏/被遮挡也能跑）：
 # 1. 用 --menu-preview 启动 App，该参数会立即弹一次托盘菜单；
 # 2. 通过 UI Automation 枚举菜单里的按钮，校验名称与命中区；
-# 3. 用 InvokePattern 点「设置」，校验菜单关闭且「存储配置」窗口打开。
+# 3. 用 InvokePattern 点「设置」，校验菜单关闭且「设置」窗口打开。
 param(
     [switch]$KeepOpen
 )
@@ -15,7 +15,7 @@ $TS = [System.Windows.Automation.TreeScope]
 $CT = [System.Windows.Automation.ControlType]
 
 $menuTitle = "菜单"
-$settingsTitle = "存储配置"
+$settingsTitle = "设置"
 $settingsBtn = "设置"
 
 $exe = "src\FileUploader.App\bin\Release\net10.0-windows10.0.22621.0\win-x64\FileUploader.exe"

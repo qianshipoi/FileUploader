@@ -73,6 +73,13 @@ public sealed record AppSettings
     /// </summary>
     public bool FlashDropEnabled { get; init; } = true;
 
+    /// <summary>
+    /// 静默启动：启动时不弹出主窗口，只在托盘里待命（点托盘图标随时叫回来）。
+    /// 托盘图标建不出来、还没配置存储、或命令行带了要上传的文件时仍会显示主窗口，
+    /// 否则用户会以为程序根本没启动。
+    /// </summary>
+    public bool StartSilently { get; init; }
+
     /// <summary>去掉协议前缀与结尾斜杠后的 Endpoint。</summary>
     public string NormalizedEndpoint
     {

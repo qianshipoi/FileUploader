@@ -171,6 +171,7 @@ void RunVectors()
             UseDateFolder = false,
             PathStyle = true,
             FlashDropEnabled = false,
+            StartSilently = true,
         };
 
         SettingsStore.SaveTo(file, original);
