@@ -353,6 +353,7 @@ tools/uia-settings.ps1              设置窗口的 UI 自动化脚本（回归�
 tools/uia-history-search.ps1        历史记录搜索与「下载」保存对话框的 UI 自动化回归
 tools/tray-activate-test.ps1       托盘激活回归：窗口被别的窗口压住时点托盘要能叫到前台
 tools/update-e2e-test.ps1          检查更新与自更新回归：本机假 feed → 真下载 → 真替换 → 真重启
+tools/update-live-test.ps1         对着已发布的 Release 跑真自更新（会真下载 ~90 MB，用便携副本）
 tools/flash-drop-test.ps1           拖拽浮现气泡回归（位置 / 命中穿透 / 落点注册 / 设置开关 / 拖选文字）
 tools/real-drag-onto-bubble.ps1     真实拖拽验证（资源管理器拖文件到气泡，ESC 取消不上传）
 docs/                               截图
@@ -391,7 +392,8 @@ docs/                               截图
 - 检查更新的离线自测（`FileUploader.Verify update`，26 项）：版本比较（v 前缀、同版本、预发布、`beta.10 > beta.9` 的字典序陷阱、非法版本号）、从 Release 说明里只抽「本次变更」那一节、SHA256 按资产名优先匹配、解析真实形状的 release JSON（选中 win-x64 exe、`digest` 归一化成小写、`size`、发布页链接）。
 - 检查更新的**真实网络**实测：便携副本（版本 0.2.0）→ UIA 点「检查更新」→ 打 `api.github.com` 拿到最新 release `v0.2.0` → 显示「已经是最新版本（0.2.0）」。
 - 自更新端到端（`tools/update-e2e-test.ps1`，本机假 feed + 假新版 exe，不碰真实 GitHub）：界面列出「发现新版本 9.9.9」和两条变更 → **摘要故意给错时拒绝替换并提示「校验失败…已丢弃，没有替换任何文件」**（exe 哈希不变）→ 换成正确摘要后真下载、真替换：旧进程退出、新进程起来、磁盘上的 exe SHA256 与 feed 一致、没有留下 `.new` 中间文件、缓存在 `%TEMP%\FileUploader\update-9.9.9\`，重启后 `.old` 被自动清理且程序正常运行。
-- `dotnet build`（Debug/Release）与 `dotnet publish` 均无警告无错误。
+- **真实 GitHub 自更新实测（v0.2.0 → v0.2.1）**：拿留档的 0.2.0 便携副本点「检查更新」→ 显示「发现新版本 0.2.1（当前 0.2.0） · 发布于 2026-11-18」并列出 15 条变更 → 点「立即更新并重启」→ 15 秒下完 93 MB（进度 0%→100%）→ 旧进程退出、新进程起来；更新后 exe 的 SHA256 与 Release 资产 digest 完全一致、设置页显示「当前版本 0.2.1」。
+- dotnet build（Debug/Release）与 dotnet publish 均无警告无错误。
 
 ## 排查闪退
 
