@@ -28,13 +28,15 @@
 - 单实例：重复双击只把已有窗口叫到前台，不会堆出多份后台进程
 
 **其它**
-- 检查更新（手动）：读 GitHub Release，列出「更新了哪些地方」，一键下载 → 校验 SHA256 → 替换 exe → 重启
+- 检查更新（手动）：读 GitHub Release，列出「更新了哪些地方」；**安装版**一键静默升级并自动重启，**便携版**只下载新版、绝不替换自己
+- 安装包（Inno Setup，每用户、免管理员）：开始菜单快捷方式 + 卸载项；卸载不删配置与历史
 - 命令行/拖到 exe 图标上即可上传；配置可导出成分发文件，对方首次启动自动导入
 
 ## 运行环境
 
 - Windows 10 1809+ / Windows 11，x64
-- 单文件便携版自带 .NET 10 运行时与 Windows App SDK，目标机器**什么都不用装**
+- 安装版与便携版都自带 .NET 10 运行时与 Windows App SDK，目标机器**什么都不用装**
+- 两种发法：**安装版**（推荐，装到当前用户目录、免管理员，更新时静默升级并自动重启）与**单文件便携版**（一个 exe 拷来拷去，更新只下载新版、不替换自己）
 
 ## 快速开始
 
@@ -47,11 +49,15 @@ dotnet run --project src\FileUploader.App
 
 # 发布单文件便携版 → dist-portable\FileUploader.exe
 powershell -File publish-portable.ps1
+
+# 打安装包 → dist\FileUploader-<版本>-setup.exe（需要 Inno Setup 6.3+）
+powershell -File build-installer.ps1
 ```
 
 | 产物 | 内容 | 适用 |
 |---|---|---|
-| `dist-portable\FileUploader.exe` | 单文件便携版（≈89 MB，自带运行时） | 发给别人，拷过去双击就用 |
+| `dist\FileUploader-<版本>-setup.exe` | 安装包（每用户安装，开始菜单 + 卸载项） | **推荐发给普通用户**，点一下就更新 |
+| `dist-portable\FileUploader.exe` | 单文件便携版（≈89 MB，自带运行时） | 拷过去双击就用，更新只下载 |
 | `dist\` | 目录版（多文件，需要目标机器装 .NET 10 运行时） | 本机开发自用 |
 
 首次使用：右上角「设置」→ 填 Protocol / Endpoint / 桶名 / AK / SK → 「测试连接」→ 回主窗口拖文件。
@@ -61,7 +67,7 @@ powershell -File publish-portable.ps1
 | 文档 | 内容 |
 |---|---|
 | [使用手册](docs/usage.md) | 界面分工、设置项、历史搜索与下载、大文件分片与断点续传、ZIP 打包、链接类型、简洁模式、拖拽浮现、托盘、静默启动、单实例、开机自启、检查更新、命令行、数据文件 |
-| [分发与部署](docs/deployment.md) | 便携版怎么发、导出配置给别人的流程与加密格式 |
+| [分发与部署](docs/deployment.md) | 安装版 vs 便携版怎么选、安装包怎么打、导出配置给别人的流程与加密格式 |
 | [开发指南](docs/development.md) | 技术栈、构建/发布、项目结构、自测与回归、Docker + RustFS 本地验证、调试开关、踩过的坑 |
 | [发版](docs/release.md) | tag 触发流水线、版本号要两边一致、推荐步骤 |
 | [已验证清单](docs/verification.md) | 真的跑过的验证结论（回归对照用） |
@@ -70,13 +76,14 @@ powershell -File publish-portable.ps1
 
 ## 发版
 
-推一个 `v` 开头的 tag，GitHub Actions 会打包单文件便携版并发布到 Release。细节与注意事项见 [发版](docs/release.md)。
+推一个 `v` 开头的 tag，GitHub Actions 会打包单文件便携版**和安装包**并发布到 Release。细节与注意事项见 [发版](docs/release.md)。
 
 ## 已知限制
 
 - 分片上传是**顺序**传片（一个文件同时只传一片；多个文件之间仍然并发 3 路），没有做片内并行
 - 续传靠本地记录（`%APPDATA%\FileUploader\uploads`）：换机器、清掉这个目录，或本地文件被改过就得重新传
-- 检查更新要能访问 `api.github.com`；自更新只能替换有写权限目录下的 exe
+- 检查更新要能访问 `api.github.com`；安装版的升级依赖安装器（装目录得可写，每用户安装则天然满足）
+- 安装包没有代码签名（与便携版一样会被 SmartScreen 提醒）；安装界面是英文（Inno Setup 没有官方简体中文语言包）
 - 只支持 Windows，界面文字为中文；Reactor 仍是 preview 版
 
 详见 [排查与常见问题](docs/troubleshooting.md#已知限制)。

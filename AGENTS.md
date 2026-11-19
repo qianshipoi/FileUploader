@@ -45,7 +45,7 @@ Conventional Commits，**标题英文类型 + 中文描述**，正文用中文�
 ## 3. 分支与发版
 
 - 主分支 `main`，线性历史优先，不保留无意义的 merge 提交。
-- 发版靠 tag：`git tag vX.Y.Z && git push origin vX.Y.Z`，触发 `.github/workflows/release.yml` 打包单文件版并发布到 GitHub Release。**只由用户决定版本号**。
+- 发版靠 tag：`git tag vX.Y.Z && git push origin vX.Y.Z`，触发 `.github/workflows/release.yml` 打包单文件便携版 + 安装包并发布到 GitHub Release。**只由用户决定版本号**。
 - `ci.yml` 在 push / PR 时跑构建与自测；改 CI 文件后要提醒用户可能需要 `workflow` 权限的凭据。
 
 ## 4. 代码规范
@@ -101,8 +101,9 @@ dotnet run --project tools\FileUploader.Verify -c Release
 | `uia-resume-test.ps1` | 断点续传：列表里出现「已中断 · 已传 xx%」→ 点「继续」→ 等到「已上传」（前置：上传被打断过，见 `docs/development.md`） |
 | `uia-tray-menu.ps1` | 托盘菜单结构与点击 |
 | `tray-activate-test.ps1` | 托盘激活：窗口被别的窗口压住时点托盘要能把它叫到前台（用 `--bring-preview` 触发同一条路径） |
-| `update-e2e-test.ps1` | 检查更新与自更新：本机假 feed（`FU_UPDATE_FEED`）→ 错误摘要必须拒绝替换 → 真下载真替换真重启 |
-| `update-live-test.ps1` | 对着**已发布**的 Release 跑真自更新（会真下载 ~90 MB 并替换指定副本里的 exe，用前先复制一份便携副本） |
+| `update-e2e-test.ps1` | 便携版更新：本机假 feed（`FU_UPDATE_FEED`）→ 错误摘要必须拒绝下载 → 只下载新版、**不替换自己** |
+| `update-live-test.ps1` | 对着**已发布**的 Release 跑真更新（会真下载 ~90 MB；便携版只下载、不替换） |
+| `update-installed-e2e-test.ps1` | **安装版**静默升级：本机假 feed → 真安装 → 真静默升级 → 安装器把程序拉起来 → 真卸载（会动 HKCU 与开始菜单，跑完自动清理） |
 | `single-instance-test.ps1` | 单实例激活（第二次启动把已有窗口叫到前台）/ 不同目录副本互不影响 / 静默启动隐藏窗口并给「已在托盘运行」提示 |
 | `uia-header-gear.ps1` / `uia-click.ps1` / `uia-pick.ps1` / `uia-invoke-test.ps1` | 主窗口控件交互 |
 | `compact-race-test.ps1` | 简洁模式快速进出、气泡与主窗口竞态 |
@@ -124,6 +125,7 @@ dotnet run --project tools\FileUploader.Verify -c Release
 - 目标系统 Windows 10 1809+ / Windows 11；当前开发机为 Windows 10 22H2（19045），单屏 2560×1440 + 副屏 1920×1080。
 - 运行时数据目录：`%APPDATA%\FileUploader`（`settings.json`、`history.json`、`bubble.json`、`app.ico`、`crash.log`、`uploads\` 分片续传状态）；便携模式下跟随 `exe\data`。
 - `gh` 访问 github.com 需要代理：`$env:HTTPS_PROXY='http://127.0.0.1:12000'`；`git push` 已配全局代理。
+- 打安装包要用 Inno Setup 6.3+ 的 `ISCC.exe`：本机装在 `%LOCALAPPDATA%\Programs\InnoSetup7`，CI 由 release.yml 自己下 `innosetup-7.1.1-x64.exe` 静默安装。
 
 ## 7. 安全与隐私
 
@@ -138,8 +140,8 @@ dotnet run --project tools\FileUploader.Verify -c Release
 | 文件 | 内容 |
 |---|---|
 | `docs/usage.md` | 面向使用者的完整说明：界面分工、使用步骤、设置项、历史搜索与下载、大文件分片与断点续传、ZIP 打包、链接类型、简洁模式、拖拽浮现、托盘、静默启动、单实例、开机自启、检查更新、命令行、数据文件 |
-| `docs/deployment.md` | 便携版分发、导出配置给对方（含加密格式说明） |
-| `docs/development.md` | 技术栈、构建/发布、项目结构、自测与回归、Docker + RustFS 本地验证、调试开关、踩过的坑 |
+| `docs/deployment.md` | 安装版 vs 便携版怎么选、安装包怎么打、导出配置给对方（含加密格式说明） |
+| `docs/development.md` | 技术栈、构建/发布、打安装包、项目结构、自测与回归、Docker + RustFS 本地验证、调试开关、踩过的坑 |
 | `docs/release.md` | 发版流程、版本号要两边一致、推荐步骤 |
 | `docs/verification.md` | 已验证清单（真的跑过的结论，回归对照用） |
 | `docs/troubleshooting.md` | 排查与常见问题、已知限制 |

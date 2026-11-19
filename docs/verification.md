@@ -47,3 +47,7 @@
 - 取消再重试续传（界面）：400 MiB 传到 285 MiB（34 片）点「取消」→ 记录变「已取消」、`uploads` 里的续传状态保留 → 点「重试」两秒内传完（只补剩下的约 115 MiB，进度没有从头开始），下载回来逐字节一致。
 - 移除「已中断」的记录：本地 `uploads\*.json` 立刻消失；服务端拿那个 uploadId 再 Complete 回 `NoSuchUpload`（分片确实被 Abort 掉了，没有留在桶里）。
 - 「重试/继续」这类状态变化后列表按钮文案正确：中断行给的是「继续」（AutomationName `继续上传 <文件名>`），失败行给的是「重试」（`重试上传 <文件名>`）。
+- **安装包（Inno Setup 7.1.1）实测**：`build-installer.ps1` → `dist\FileUploader-0.3.0-setup.exe`（83.3 MB，SHA256 `b54a998c…`）；静默安装后 `%LOCALAPPDATA%\Programs\FileUploader` 里是 exe + `unins000.*`，`HKCU\Software\FileUploader\InstallPath` 指向安装目录，开始菜单出现「OSS 拖拽上传」与「卸载 OSS 拖拽上传」，设置 → 应用里能看到卸载项；卸载后注册表标记、卸载项、开始菜单目录、升级缓存目录全部清掉，`%APPDATA%\FileUploader`（配置与历史）原样保留。
+- **安装版静默升级端到端（`tools/update-installed-e2e-test.ps1`，本机假 feed 把已打好的安装包宣布成 9.9.9）**：设置页识别为「安装版」→ 检查更新显示「发现新版本 9.9.9」→ 按钮是「立即更新并重启」→ 点下去把安装包下到 `%LOCALAPPDATA%\FileUploader\update-9.9.9\`（SHA256 与 feed 一致）→ 旧进程退出 → **安装器的静默 `[Run]` 把程序重新拉起来**（新进程仍从安装目录启动）→ exe 健在。全部 21 项 PASS。
+- **便携版更新端到端（`tools/update-e2e-test.ps1`，本机假 feed）**：检查更新显示「发现新版本 9.9.9」+ 2 条变更；按钮是「下载新版」且**没有**「立即更新并重启」；摘要故意给错时报「校验失败…已丢弃」且不留文件、exe 哈希不变；换正确摘要后下到 `exe目录\update-9.9.9\`（SHA256 与 feed 一致），**当前 exe 哈希一点没变**、没有 `.new`/`.old` 中间文件，旧版照常能启动。全部 16 项 PASS。
+- 判定逻辑：`portable.txt` 存在 → 便携版；注册表 `InstallPath` 与当前 exe 目录一致 → 安装版；exe 被拷到别处 → 便携版（不会被自动替换）。三种情况分别用便携副本、装好的安装版、以及从工作区拷出来的副本验证过。
