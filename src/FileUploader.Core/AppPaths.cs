@@ -15,12 +15,15 @@ public static class AppPaths
     static AppPaths()
     {
         // 单文件发布时 AppContext.BaseDirectory 可能是解压目录，优先用真实 exe 路径。
-        var exeDirectory = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
-        IsPortable = File.Exists(Path.Combine(exeDirectory, PortableMarker));
+        ExeDirectory = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+        IsPortable = File.Exists(Path.Combine(ExeDirectory, PortableMarker));
         DataDirectory = IsPortable
-            ? Path.Combine(exeDirectory, "data")
+            ? Path.Combine(ExeDirectory, "data")
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FileUploader");
     }
+
+    /// <summary>本进程 exe 所在目录（单文件发布时是真实 exe 的目录，不是解压目录）。</summary>
+    public static string ExeDirectory { get; }
 
     /// <summary>是否处于便携模式（exe 旁边有 portable.txt）。</summary>
     public static bool IsPortable { get; }

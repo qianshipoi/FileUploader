@@ -35,9 +35,16 @@ public sealed record UpdateCheckResult(
     string? AssetSha256 = null,
     long AssetSize = 0,
     DateTimeOffset? PublishedAt = null,
-    string? Error = null)
+    string? Error = null,
+    string? InstallerName = null,
+    string? InstallerUrl = null,
+    string? InstallerSha256 = null,
+    long InstallerSize = 0)
 {
     public bool HasUpdate => Status == UpdateCheckStatus.UpdateAvailable;
+
+    /// <summary>这个 Release 带安装包（安装版用 setup.exe 静默升级）。</summary>
+    public bool HasInstaller => !string.IsNullOrEmpty(InstallerUrl) && !string.IsNullOrEmpty(InstallerName);
 
     public static UpdateCheckResult Fail(string currentVersion, string error) =>
         new(UpdateCheckStatus.Failed, currentVersion, Error: error);
@@ -54,6 +61,9 @@ public static class UpdateChecker
 
     /// <summary>单文件便携版的资产后缀。</summary>
     public const string PortableAssetSuffix = "-win-x64.exe";
+
+    /// <summary>安装包的资产后缀（安装版用它做静默升级）。</summary>
+    public const string InstallerAssetSuffix = "-setup.exe";
 
     private static readonly Regex Sha256Regex = new(
         @"SHA256\s*\((?<name>[^)]*)\)\s*=\s*(?<hash>[0-9A-Fa-f]{64})",
@@ -140,27 +150,44 @@ public static class UpdateChecker
         string? assetUrl = null;
         string? assetSha = null;
         long assetSize = 0;
+        string? installerName = null;
+        string? installerUrl = null;
+        string? installerSha = null;
+        long installerSize = 0;
         if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
         {
             foreach (var asset in assets.EnumerateArray())
             {
                 var name = GetString(asset, "name");
-                if (name is null || !name.EndsWith(PortableAssetSuffix, StringComparison.OrdinalIgnoreCase))
+                if (name is null)
                 {
                     continue;
                 }
 
-                assetName = name;
-                assetUrl = GetString(asset, "browser_download_url");
-                assetSha = NormalizeDigest(GetString(asset, "digest"));
-                assetSize = asset.TryGetProperty("size", out var size) && size.TryGetInt64(out var bytes) ? bytes : 0;
-                break;
+                // 安装包先判断：它虽然也是 .exe，但不以 -win-x64.exe 结尾，两个后缀不会打架。
+                if (installerName is null && name.EndsWith(InstallerAssetSuffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    installerName = name;
+                    installerUrl = GetString(asset, "browser_download_url");
+                    installerSha = NormalizeDigest(GetString(asset, "digest"));
+                    installerSize = asset.TryGetProperty("size", out var installerBytes) && installerBytes.TryGetInt64(out var ib) ? ib : 0;
+                    continue;
+                }
+
+                if (assetName is null && name.EndsWith(PortableAssetSuffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    assetName = name;
+                    assetUrl = GetString(asset, "browser_download_url");
+                    assetSha = NormalizeDigest(GetString(asset, "digest"));
+                    assetSize = asset.TryGetProperty("size", out var size) && size.TryGetInt64(out var bytes) ? bytes : 0;
+                }
             }
         }
 
         var notes = GetString(root, "body");
         // 资产没带 digest（旧接口）时退回 Release 说明里写的 SHA256。
         assetSha ??= FindSha256(notes, assetName);
+        installerSha ??= FindSha256(notes, installerName);
 
         DateTimeOffset? publishedAt = DateTimeOffset.TryParse(GetString(root, "published_at"), out var published)
             ? published
@@ -178,7 +205,11 @@ public static class UpdateChecker
             assetUrl,
             assetSha,
             assetSize,
-            publishedAt);
+            publishedAt,
+            InstallerName: installerName,
+            InstallerUrl: installerUrl,
+            InstallerSha256: installerSha,
+            InstallerSize: installerSize);
     }
 
     /// <summary>从 Release 说明里抽「本次变更」小节：匹配标题含"变更"的章节，收集其下的列表项。</summary>
