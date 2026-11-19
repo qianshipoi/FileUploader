@@ -12,6 +12,11 @@ public enum UploadState
     Succeeded,
     Failed,
     Canceled,
+
+    /// <summary>
+    /// 上次没传完的分片上传（重启后从续传状态里读出来的）：点「继续」只补没传完的那几片。
+    /// </summary>
+    Interrupted,
 }
 
 /// <summary>上传列表中的一行。</summary>
@@ -38,10 +43,11 @@ public sealed record UploadItem(
         UploadState.Succeeded => "已上传",
         UploadState.Failed => "失败",
         UploadState.Canceled => "已取消",
+        UploadState.Interrupted => $"已中断 · 已传 {Progress:0}%",
         _ => "",
     };
 
-    public bool IsFinished => State is UploadState.Succeeded or UploadState.Failed or UploadState.Canceled;
+    public bool IsFinished => State is UploadState.Succeeded or UploadState.Failed or UploadState.Canceled or UploadState.Interrupted;
 
     /// <summary>还在处理中（打包 / 排队 / 上传），可以取消。</summary>
     public bool IsActive => State is UploadState.Packing or UploadState.Queued or UploadState.Uploading;

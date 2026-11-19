@@ -115,6 +115,8 @@ public sealed partial class UploadApp
             UploadState.Succeeded => Theme.SystemSuccess,
             UploadState.Failed => Theme.SystemCritical,
             UploadState.Canceled => Theme.TertiaryText,
+            // 「已中断」是还能继续的，用提醒色而不是失败红，别让人以为白传了。
+            UploadState.Interrupted => Theme.SystemCaution,
             _ => Theme.SecondaryText,
         };
 
@@ -144,7 +146,14 @@ public sealed partial class UploadApp
                 // 打包失败/临时 zip 已删的条目没有本地源文件，重试跑不起来，只给「移除」。
                 if (!string.IsNullOrEmpty(item.LocalPath))
                 {
-                    actions.Add(Button("重试", () => UploadQueue.Current.Retry(item)).SubtleButton());
+                    // 「已中断」是上次没传完的分片上传：同样的动作，只是文案要说清是"继续"。
+                    actions.Add(Button(
+                            item.State == UploadState.Interrupted ? "继续" : "重试",
+                            () => UploadQueue.Current.Retry(item))
+                        .SubtleButton()
+                        .AutomationName(item.State == UploadState.Interrupted
+                            ? $"继续上传 {item.FileName}"
+                            : $"重试上传 {item.FileName}"));
                 }
 
                 break;
@@ -168,6 +177,8 @@ public sealed partial class UploadApp
         {
             UploadState.Packing => Progress(item.Progress).Height(4).AutomationName($"{item.FileName} 打包进度"),
             UploadState.Uploading or UploadState.Queued => Progress(item.Progress).Height(4).AutomationName($"{item.FileName} 上传进度"),
+            // 中断的条目也把进度条留着：看一眼就知道续传是从几成开始的。
+            UploadState.Interrupted => Progress(item.Progress).Height(4).AutomationName($"{item.FileName} 已传进度"),
             UploadState.Failed => TextBlock(item.Error ?? "上传失败")
                 .FontSize(12)
                 .Foreground(Theme.SystemCritical)

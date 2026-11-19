@@ -17,6 +17,10 @@ public sealed partial class UploadApp
         AppWindows.EnsureTray();
         AppWindows.EnsureDragFlash();
 
+        // 上一次没传完的分片上传：本地文件没了 / 被改过 / 放太久的会话在这里清掉（含服务端分片）。
+        // 扔到后台：要读本地文件信息、还可能发几个 Abort 请求，别卡住窗口。
+        _ = Task.Run(UploadQueue.Current.CleanupStaleSessions);
+
         // 上一次自动更新留下的旧 exe（FileUploader.exe.old）：新进程已经跑起来了，可以删了。
         Updater.CleanupPreviousVersion();
 
