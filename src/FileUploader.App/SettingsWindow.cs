@@ -37,7 +37,14 @@ public sealed class SettingsWindow : Component
     private Action<double> _setUpdateProgress = _ => { };
     private string? _updateError;
     private Action<string?> _setUpdateError = _ => { };
+    private string? _downloadedPath;
+    private Action<string?> _setDownloadedPath = _ => { };
+    private string? _downloadedSha;
+    private Action<string?> _setDownloadedSha = _ => { };
     private CancellationTokenSource? _updateCancellation;
+
+    /// <summary>这一轮是安装版还是便携版（每次 Render 时读一次，决定按钮文案与更新方式）。</summary>
+    private InstallKind _installKind = InstallKind.Portable;
 
     /// <summary>Render 已经跑过一次，说明 <c>_setXxx</c> 都接好了，可以直接触发检查。</summary>
     private bool _rendered;
@@ -77,6 +84,8 @@ public sealed class SettingsWindow : Component
         var (updateDetailOpen, setUpdateDetailOpen) = UseState(false, threadSafe: true);
         var (updateProgressOpen, setUpdateProgressOpen) = UseState(false, threadSafe: true);
         var (updateError, setUpdateError) = UseState<string?>(null, threadSafe: true);
+        var (downloadedPath, setDownloadedPath) = UseState<string?>(null, threadSafe: true);
+        var (downloadedSha, setDownloadedSha) = UseState<string?>(null, threadSafe: true);
 
         _settings = settings;
         _testing = testing;
@@ -98,6 +107,11 @@ public sealed class SettingsWindow : Component
         _setUpdateProgressOpen = setUpdateProgressOpen;
         _updateError = updateError;
         _setUpdateError = setUpdateError;
+        _downloadedPath = downloadedPath;
+        _setDownloadedPath = setDownloadedPath;
+        _downloadedSha = downloadedSha;
+        _setDownloadedSha = setDownloadedSha;
+        _installKind = InstallLocation.Kind;
         _rendered = true;
 
         // 托盘菜单点「检查更新」进来的：窗口挂载后自动查一次。
@@ -379,7 +393,9 @@ public sealed class SettingsWindow : Component
 
         return Section(
             "关于与更新",
-            "更新来自 GitHub 的 Release；程序就是一个 exe，删掉它等于卸载。",
+            _installKind == InstallKind.Installed
+                ? "安装版：更新会下载安装包、静默替换程序并自动重启，不用手动换文件。"
+                : "便携版：更新只把新版 exe 下载到程序旁边，绝不自动替换你手上这份。",
             Grid(
                 columns: [GridSize.Star(), GridSize.Auto],
                 rows: [GridSize.Auto],
@@ -408,10 +424,11 @@ public sealed class SettingsWindow : Component
             _ => "检查更新",
         };
 
-        // 没有更新（已是最新/检查失败）时不显示主按钮：留一个灰着的「立即更新并重启」只会让人困惑。
-        var primaryText = update is { Status: UpdateCheckStatus.UpdateAvailable, AssetUrl.Length: > 0 }
-            ? "立即更新并重启"
-            : string.Empty;
+        // 安装版走「下载安装包 → 静默安装 → 重启」，便携版只「下载新版」，按钮文案跟着变。
+        var installed = _installKind == InstallKind.Installed;
+        var hasAsset = update is { Status: UpdateCheckStatus.UpdateAvailable }
+                       && (installed ? update.HasInstaller : update.AssetUrl is { Length: > 0 });
+        var primaryText = hasAsset ? (installed ? "立即更新并重启" : "下载新版") : string.Empty;
 
         var dialog = new ContentDialogElement(title, BuildUpdateDetailContent(update), primaryText)
         {
@@ -479,22 +496,35 @@ public sealed class SettingsWindow : Component
 
         if (hasUpdate)
         {
-            if (string.IsNullOrEmpty(update.AssetUrl))
+            var installed = _installKind == InstallKind.Installed;
+            var assetName = installed ? update.InstallerName : update.AssetName;
+            var assetUrl = installed ? update.InstallerUrl : update.AssetUrl;
+            var assetSize = installed ? update.InstallerSize : update.AssetSize;
+
+            if (string.IsNullOrEmpty(assetUrl))
             {
-                rows.Add(TextBlock("这个 Release 没有 win-x64 单文件 exe，请到发布页手动下载。")
+                rows.Add(TextBlock(installed
+                        ? "这个 Release 没有安装包（…-setup.exe），请到发布页手动下载新版。"
+                        : "这个 Release 没有 win-x64 单文件 exe，请到发布页手动下载。")
                     .FontSize(11)
                     .Foreground(Theme.SystemCaution)
                     .TextWrapping());
             }
             else
             {
-                var sizeText = update.AssetSize > 0
-                    ? $"（约 {UploadItem.FormatSize(update.AssetSize)}）"
-                    : string.Empty;
-                rows.Add(TextBlock($"点「立即更新并重启」会下载新版{sizeText}、校验 SHA256，然后替换当前 exe 并重启；配置与历史不受影响。")
+                var sizeText = assetSize > 0 ? $"（约 {UploadItem.FormatSize(assetSize)}）" : string.Empty;
+                rows.Add(TextBlock(installed
+                        ? $"点「立即更新并重启」会下载安装包{sizeText}、校验 SHA256，然后静默安装并自动重启；配置与历史不受影响。"
+                        : $"点「下载新版」会把新版本下载到程序旁边的 update-{update.LatestVersion}\\ 里{sizeText}、校验 SHA256，" +
+                          "**不会**替换你现在这份；关掉程序后把新 exe 覆盖过来即可（想留旧版随时能留）。")
                     .FontSize(11)
                     .Foreground(Theme.TertiaryText)
                     .TextWrapping());
+
+                if (!string.IsNullOrEmpty(assetName))
+                {
+                    rows.Add(TextBlock($"文件：{assetName}").FontSize(11).Foreground(Theme.TertiaryText).TextWrapping());
+                }
             }
         }
 
@@ -502,35 +532,68 @@ public sealed class SettingsWindow : Component
         return VStack(10, rows.ToArray());
     }
 
-    /// <summary>下载/替换进度对话框：进度条实时刷新，按钮只有「取消 / 关闭」。</summary>
+    /// <summary>
+    /// 下载/安装进度对话框。三种状态共用：
+    /// 失败 → 说明原因；便携版下完 → 给出路径与哈希（不再自动替换）；其它 → 进度条。
+    /// </summary>
     private Element BuildUpdateProgressDialog()
     {
         var update = _update;
         var failed = !string.IsNullOrEmpty(_updateError);
+        var downloaded = !failed && !string.IsNullOrEmpty(_downloadedPath);
         var rows = new List<Element>();
 
         if (failed)
         {
             rows.Add(TextBlock(_updateError!).FontSize(12).Foreground(Theme.SystemCritical).TextWrapping());
-            rows.Add(TextBlock($"没有替换任何文件，当前版本仍然是 {AppVersion.Current}。")
+            rows.Add(TextBlock(_installKind == InstallKind.Installed
+                    ? $"没有替换任何文件，当前版本仍然是 {AppVersion.Current}。"
+                    : $"当前这份程序没有任何改动，仍然是 {AppVersion.Current}。")
+                .FontSize(11)
+                .Foreground(Theme.TertiaryText)
+                .TextWrapping());
+        }
+        else if (downloaded)
+        {
+            rows.Add(TextBlock($"新版 {update?.LatestVersion} 已下载并校验通过：").FontSize(12));
+            rows.Add(TextBlock(_downloadedPath!)
+                .FontSize(11)
+                .Foreground(Theme.SecondaryText)
+                .IsTextSelectionEnabled(true)
+                .TextWrapping());
+            if (_downloadedSha is { Length: > 0 } sha)
+            {
+                rows.Add(TextBlock($"SHA256 {sha}").FontSize(11).Foreground(Theme.TertiaryText).TextWrapping());
+            }
+
+            rows.Add(TextBlock($"关掉本程序后，把上面这个文件复制/改名成 {Path.GetFileName(Environment.ProcessPath ?? "FileUploader.exe")} " +
+                               "覆盖到程序目录即可；想保留旧版就先把它复制一份。配置与历史不受影响。")
                 .FontSize(11)
                 .Foreground(Theme.TertiaryText)
                 .TextWrapping());
         }
         else
         {
-            rows.Add(TextBlock($"正在下载新版本 {update?.LatestVersion}（{_updateProgress:P0}）").FontSize(12));
+            rows.Add(TextBlock(_installKind == InstallKind.Installed
+                    ? $"正在下载安装包 {update?.LatestVersion}（{_updateProgress:P0}）"
+                    : $"正在下载新版本 {update?.LatestVersion}（{_updateProgress:P0}）")
+                .FontSize(12));
             rows.Add(Progress(_updateProgress * 100).Height(6).AutomationName("更新下载进度"));
-            rows.Add(TextBlock("下载完成后会校验 SHA256，校验通过才替换 exe 并自动重启。")
+            rows.Add(TextBlock(_installKind == InstallKind.Installed
+                    ? "下载完成后会校验 SHA256，校验通过才静默安装并自动重启。"
+                    : "下载完成后会校验 SHA256；只下载，不会替换你现在这份程序。")
                 .FontSize(11)
                 .Foreground(Theme.TertiaryText)
                 .TextWrapping());
         }
 
-        var dialog = new ContentDialogElement(failed ? "更新失败" : "正在更新", VStack(10, rows.ToArray()), string.Empty)
+        var dialog = new ContentDialogElement(
+            failed ? "更新失败" : downloaded ? "新版已下载" : "正在下载",
+            VStack(10, rows.ToArray()),
+            downloaded ? "打开所在目录" : string.Empty)
         {
-            PrimaryButtonText = string.Empty,
-            CloseButtonText = failed || !_applyingUpdate ? "关闭" : "取消",
+            PrimaryButtonText = downloaded ? "打开所在目录" : string.Empty,
+            CloseButtonText = failed || downloaded || !_applyingUpdate ? "关闭" : "取消",
             DefaultButton = ContentDialogButton.Close,
             IsOpen = _updateProgressOpen,
         };
@@ -548,6 +611,8 @@ public sealed class SettingsWindow : Component
 
         _setUpdate(null);
         _setUpdateError(null);
+        _setDownloadedPath(null);
+        _setDownloadedSha(null);
         // 上一次更新失败时进度对话框可能还开着（模态），先收掉，否则新结果对话框弹不出来。
         _setUpdateProgressOpen(false);
         _setCheckingUpdate(true);
@@ -591,9 +656,19 @@ public sealed class SettingsWindow : Component
             _updateCancellation?.Cancel();
             _setApplyingUpdate(false);
         }
+
+        if (result == ContentDialogResult.Primary && _downloadedPath is { Length: > 0 } path)
+        {
+            OpenInExplorer(path);
+        }
+
+        _setDownloadedPath(null);
+        _setDownloadedSha(null);
     }
 
-    /// <summary>下载 → 校验 → 替换 → 重启，全过程在进度对话框里反馈。</summary>
+    /// <summary>
+    /// 下载 → 校验 → （安装版）静默安装并重启 / （便携版）只把新版 exe 放着并告诉用户。
+    /// </summary>
     private async Task StartUpdateAsync()
     {
         var update = _update;
@@ -608,7 +683,12 @@ public sealed class SettingsWindow : Component
             return;
         }
 
+        // 这一轮按哪种方式更新，在开始时就定下来（下载过程中用户不会换配置）。
+        var kind = _installKind;
+
         _setUpdateError(null);
+        _setDownloadedPath(null);
+        _setDownloadedSha(null);
         _setUpdateProgress(0);
         _setApplyingUpdate(true);
         _setUpdateProgressOpen(true);
@@ -618,7 +698,7 @@ public sealed class SettingsWindow : Component
         try
         {
             var progress = new Progress<double>(value => _setUpdateProgress(value));
-            var download = await Updater.DownloadAsync(update, progress, cancellation.Token);
+            var download = await Updater.DownloadAsync(update, kind, progress, cancellation.Token);
             if (cancellation.IsCancellationRequested)
             {
                 return;
@@ -630,19 +710,28 @@ public sealed class SettingsWindow : Component
                 return;
             }
 
-            // 换 exe 之前先把配置落盘，免得刚改的设置丢掉。
+            // 动程序之前先把配置落盘，免得刚改的设置丢掉。
             SettingsState.Current.SaveNow();
 
-            var apply = Updater.ApplyAndRestart(download.Path);
-            if (!apply.Success)
+            if (kind == InstallKind.Installed)
             {
-                _setUpdateError(apply.Error ?? "更新失败。");
+                // 安装版：把活交给安装器（换 exe、快捷方式、卸载项都由它负责），然后自己退出。
+                var apply = Updater.RunInstaller(download.Path);
+                if (!apply.Success)
+                {
+                    _setUpdateError(apply.Error ?? "启动安装包失败。");
+                    return;
+                }
+
+                _setUpdateProgressOpen(false);
+                AppWindows.ExitApplication();
                 return;
             }
 
-            // 新进程已经起来了，这边直接退出（托盘图标也一起收掉）。
-            _setUpdateProgressOpen(false);
-            AppWindows.ExitApplication();
+            // 便携版：只下载。程序不动，用户自己决定什么时候换。
+            _setDownloadedPath(download.Path);
+            _setDownloadedSha(update.AssetSha256);
+            _setUpdateProgress(1);
         }
         catch (OperationCanceledException)
         {
@@ -657,6 +746,20 @@ public sealed class SettingsWindow : Component
             _updateCancellation = null;
             cancellation.Dispose();
             _setApplyingUpdate(false);
+        }
+    }
+
+    /// <summary>在资源管理器里选中刚下载的文件（找不到文件时退回打开所在目录）。</summary>
+    private void OpenInExplorer(string path)
+    {
+        try
+        {
+            var target = File.Exists(path) ? $"/select,\"{path}\"" : $"\"{Path.GetDirectoryName(path)}\"";
+            Process.Start(new ProcessStartInfo("explorer.exe", target) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _setNotice(Notice.Error($"打不开所在目录：{ex.Message}"));
         }
     }
 
