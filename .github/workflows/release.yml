@@ -82,6 +82,36 @@ jobs:
             -p:Version=$version
           if ($LASTEXITCODE -ne 0) { throw "dotnet publish 失败（exit $LASTEXITCODE）" }
 
+      - name: 安装 Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe'
+          $installer = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
+          $dir = Join-Path $env:RUNNER_TEMP 'InnoSetup'
+          $installArgs = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /NOICONS /DIR=`"$dir`""
+          $proc = Start-Process -FilePath $installer -ArgumentList $installArgs -PassThru -Wait
+          if ($proc.ExitCode -ne 0) { throw "Inno Setup 安装失败（exit $($proc.ExitCode)）" }
+
+          $iscc = Join-Path $dir 'ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw "没找到 $iscc" }
+          "ISCC_PATH=$iscc" >> $env:GITHUB_ENV
+          Write-Host "ISCC: $iscc"
+
+      - name: 打安装包
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = "${{ steps.ver.outputs.version }}"
+          $out = Join-Path $env:GITHUB_WORKSPACE 'out'
+          pwsh -NoProfile -File (Join-Path $env:GITHUB_WORKSPACE 'build-installer.ps1') `
+            -Version $version `
+            -SourceExe (Join-Path $out 'FileUploader.exe') `
+            -SkipPublish `
+            -IsccPath $env:ISCC_PATH
+          if ($LASTEXITCODE -ne 0) { throw "build-installer.ps1 失败（exit $LASTEXITCODE）" }
+
       - name: 整理发布产物
         id: pack
         shell: pwsh
@@ -102,9 +132,19 @@ jobs:
           $size = [math]::Round((Get-Item $target).Length / 1MB, 1)
           Write-Host "$name.exe  $size MB  SHA256=$hash"
 
+          $setup = Join-Path $env:GITHUB_WORKSPACE "dist\FileUploader-$version-setup.exe"
+          if (-not (Test-Path $setup)) { throw "没有生成安装包 $setup" }
+          $setupTarget = Join-Path $out "FileUploader-$version-setup.exe"
+          Copy-Item $setup $setupTarget -Force
+          $setupHash = (Get-FileHash $setupTarget -Algorithm SHA256).Hash
+          $setupSize = [math]::Round((Get-Item $setupTarget).Length / 1MB, 1)
+          Write-Host "FileUploader-$version-setup.exe  $setupSize MB  SHA256=$setupHash"
+
           "name=$name"    >> $env:GITHUB_OUTPUT
           "sha256=$hash"  >> $env:GITHUB_OUTPUT
           "size_mb=$size" >> $env:GITHUB_OUTPUT
+          "setup_sha256=$setupHash"  >> $env:GITHUB_OUTPUT
+          "setup_size_mb=$setupSize" >> $env:GITHUB_OUTPUT
 
       - name: 生成 Release 说明
         shell: pwsh
@@ -131,18 +171,21 @@ jobs:
             ''
             "| 文件 | 说明 |"
             "|---|---|"
-            "| ``$name.exe`` | **单文件便携版**，自带 .NET 10 运行时与 Windows App SDK |"
-            "| ``$name.zip`` | 同上，压缩包（浏览器下载更稳，解压即用） |"
+            "| ``FileUploader-$version-setup.exe`` | **安装版（推荐）**：装到当前用户目录，更新时下载安装包静默升级并自动重启 |"
+            "| ``$name.exe`` | **单文件便携版**：双击即用，不写注册表；更新只把新版下载到旁边，不会自动替换自己 |"
+            "| ``$name.zip`` | 便携版的压缩包（浏览器下载更稳，解压即用） |"
             ''
             '要求：Windows 10 1809+ / Windows 11，x64。目标机器**不需要装 .NET、也不需要装 Windows App Runtime**。'
             ''
-            '- 直接双击 exe 即可运行；想配置和历史跟着 exe 走，在 exe 同级放一个空的 `portable.txt`。'
+            '- 安装版装到 `%LOCALAPPDATA%\Programs\FileUploader`（免管理员），带开始菜单快捷方式与卸载项；配置与历史在 `%APPDATA%\FileUploader`，卸载不会删。'
+            '- 便携版直接双击 exe 即可运行；想配置和历史跟着 exe 走，在 exe 同级放一个空的 `portable.txt`。'
             '- exe 没有代码签名，首次运行可能弹「Windows 已保护你的电脑」→ 更多信息 → 仍要运行。'
             '- 使用说明见仓库 [README](https://github.com/${{ github.repository }}#readme)。'
             ''
             '### 校验'
             ''
             '```'
+            "SHA256 (FileUploader-$version-setup.exe) = ${{ steps.pack.outputs.setup_sha256 }}"
             "SHA256 ($name.exe) = ${{ steps.pack.outputs.sha256 }}"
             '```'
             ''
@@ -162,9 +205,14 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
           $tag  = "${{ steps.ver.outputs.tag }}"
+          $version = "${{ steps.ver.outputs.version }}"
           $name = "${{ steps.pack.outputs.name }}"
           $out  = Join-Path $env:GITHUB_WORKSPACE 'out'
-          $files = @((Join-Path $out "$name.exe"), (Join-Path $out "$name.zip"))
+          $files = @(
+            (Join-Path $out "$name.exe"),
+            (Join-Path $out "$name.zip"),
+            (Join-Path $out "FileUploader-$version-setup.exe")
+          )
           $notes = Join-Path $env:GITHUB_WORKSPACE 'release-notes.md'
 
           $exists = $false
