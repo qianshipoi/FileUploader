@@ -33,4 +33,10 @@ public static class AppPaths
 
     /// <summary>上传历史文件路径。</summary>
     public static string HistoryPath => Path.Combine(DataDirectory, "history.json");
+
+    /// <summary>
+    /// 未完成的分片上传会话目录（断点续传用）：每个对象键一个 json，
+    /// 记着 uploadId 与已传完的分片；传完或放弃时删掉。
+    /// </summary>
+    public static string UploadsDirectory => Path.Combine(DataDirectory, "uploads");
 }
