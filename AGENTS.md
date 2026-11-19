@@ -98,6 +98,7 @@ dotnet run --project tools\FileUploader.Verify -c Release
 |---|---|
 | `uia-settings.ps1` | 设置窗口编辑链路（UI Automation，不依赖鼠标） |
 | `uia-history-search.ps1` | 历史记录：按文件名搜索 / 清除搜索 / 「下载」弹出的保存对话框（不依赖鼠标） |
+| `uia-resume-test.ps1` | 断点续传：列表里出现「已中断 · 已传 xx%」→ 点「继续」→ 等到「已上传」（前置：上传被打断过，见 `docs/development.md`） |
 | `uia-tray-menu.ps1` | 托盘菜单结构与点击 |
 | `tray-activate-test.ps1` | 托盘激活：窗口被别的窗口压住时点托盘要能把它叫到前台（用 `--bring-preview` 触发同一条路径） |
 | `update-e2e-test.ps1` | 检查更新与自更新：本机假 feed（`FU_UPDATE_FEED`）→ 错误摘要必须拒绝替换 → 真下载真替换真重启 |
@@ -121,7 +122,7 @@ dotnet run --project tools\FileUploader.Verify -c Release
 ## 6. 环境事实
 
 - 目标系统 Windows 10 1809+ / Windows 11；当前开发机为 Windows 10 22H2（19045），单屏 2560×1440 + 副屏 1920×1080。
-- 运行时数据目录：`%APPDATA%\FileUploader`（`settings.json`、`history.json`、`bubble.json`、`app.ico`、`crash.log`）；便携模式下跟随 `exe\data`。
+- 运行时数据目录：`%APPDATA%\FileUploader`（`settings.json`、`history.json`、`bubble.json`、`app.ico`、`crash.log`、`uploads\` 分片续传状态）；便携模式下跟随 `exe\data`。
 - `gh` 访问 github.com 需要代理：`$env:HTTPS_PROXY='http://127.0.0.1:12000'`；`git push` 已配全局代理。
 
 ## 7. 安全与隐私
@@ -136,7 +137,7 @@ dotnet run --project tools\FileUploader.Verify -c Release
 
 | 文件 | 内容 |
 |---|---|
-| `docs/usage.md` | 面向使用者的完整说明：界面分工、使用步骤、设置项、历史搜索与下载、ZIP 打包、链接类型、简洁模式、拖拽浮现、托盘、静默启动、单实例、开机自启、检查更新、命令行、数据文件 |
+| `docs/usage.md` | 面向使用者的完整说明：界面分工、使用步骤、设置项、历史搜索与下载、大文件分片与断点续传、ZIP 打包、链接类型、简洁模式、拖拽浮现、托盘、静默启动、单实例、开机自启、检查更新、命令行、数据文件 |
 | `docs/deployment.md` | 便携版分发、导出配置给对方（含加密格式说明） |
 | `docs/development.md` | 技术栈、构建/发布、项目结构、自测与回归、Docker + RustFS 本地验证、调试开关、踩过的坑 |
 | `docs/release.md` | 发版流程、版本号要两边一致、推荐步骤 |

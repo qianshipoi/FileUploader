@@ -47,7 +47,9 @@ src/FileUploader.Core/              与 UI 无关的存储层
   Storage/ObjectUrlBuilder.cs       直链 / 预签名链接（OSS V1、SigV4）+ 下载用地址
   ContentTypes.cs                   扩展名 → Content-Type
   Storage/Signers.cs                OSS V1 / SigV4 签名
-  Storage/ObjectStorageClient.cs    PUT Object、HEAD/PUT Bucket、进度上报、错误解析
+  Storage/ObjectStorageClient.cs    PUT Object、分片上传（Initiate/UploadPart/Complete/Abort）、HEAD/PUT Bucket、进度上报、错误解析
+  Storage/MultipartSession.cs       分片上传会话（uploadId / 分片大小 / 已传分片）与落盘（uploads\*.json）
+  Storage/MultipartUploader.cs      大文件分片上传与断点续传（阈值、分片切法、续传、单片重试）
   Storage/ObjectDownloader.cs       GET 流式下载到本地文件（进度 / 临时文件 / 错误说明）
   Storage/StorageHttp.cs            上传与下载共用的 HttpClient
 src/FileUploader.App/               WinUI 3 + Reactor 界面
@@ -84,26 +86,28 @@ docs/                               文档与截图
 # 离线自测：签名向量 / 对象键 / URL / 配置往返 / DPAPI
 dotnet run --project tools\FileUploader.Verify -c Release
 
-# 其它子命令：exchange / presign / download / zip / update / upload / settings / delete-object
+# 其它子命令：exchange / presign / download / zip / multipart / update / upload / settings / delete-object
 dotnet run --project tools\FileUploader.Verify -c Release -- zip
+
+# 分片上传 + 断点续传（离线跑本机假 S3；设了 FU_ENDPOINT 会额外跑真存储）
+dotnet run --project tools\FileUploader.Verify -c Release -- multipart
 ```
 
 回归脚本清单与约定见 [AGENTS.md](../AGENTS.md) §5（全部在 `tools/` 下，优先 UI Automation 或直接消息断言，不依赖真实鼠标）。
 
 ## 本地用 Docker + RustFS 验证
 
-不花钱、不碰真实 OSS 也能跑通整条链路：
+不花钱、不碰真实 OSS 也能跑通整条链路。**用命名卷，别用 Windows 绑挂目录**（原因见下方踩坑表）：
 
 ```powershell
 docker run -d --name fu-rustfs -p 9100:9000 -p 9101:9001 `
-  -v ${PWD}\.testdata\rustfs:/data `
   -e RUSTFS_ACCESS_KEY=testadmin -e RUSTFS_SECRET_KEY=testadmin123 `
   rustfs/rustfs:latest
 ```
 
 设置窗口里填：协议 `S3 兼容（SigV4）`、Endpoint `127.0.0.1:9100`、桶 `demo`、AK `testadmin`、SK `testadmin123`，取消「使用 HTTPS」（路径风格保持勾选）。
 
-命令行验证签名与上传：
+命令行验证签名与上传（`multipart` 会把分片上传、续传、Abort 全跑一遍）：
 
 ```powershell
 # 真实上传一次，并打印生成的链接
@@ -111,6 +115,27 @@ $env:FU_ENDPOINT='127.0.0.1:9100'; $env:FU_BUCKET='demo'
 $env:FU_AK='testadmin'; $env:FU_SK='testadmin123'
 $env:FU_PROTOCOL='s3'; $env:FU_PATHSYLE='true'; $env:FU_HTTPS='false'
 dotnet run --project tools\FileUploader.Verify -- upload
+dotnet run --project tools\FileUploader.Verify -- multipart
+```
+
+### 断点续传的界面回归（`tools/uia-resume-test.ps1`）
+
+要一份便携副本 + 一个几百 MB 的文件，把上传打断、再点「继续」：
+
+```powershell
+# 1. 便携副本（把构建输出拷出来，放个 portable.txt 就走便携模式，不碰真实配置）
+$e2e = "$env:TEMP\fu-e2e"
+Copy-Item -Recurse src\FileUploader.App\bin\Release\net10.0-windows10.0.22621.0\win-x64\* "$e2e\app"
+'s' | Set-Content "$e2e\app\portable.txt"
+dotnet run --project tools\FileUploader.Verify -- settings "$e2e\app\data\settings.json"   # 写入测试配置
+
+# 2. 传一个大文件，几秒后杀掉进程 → data\uploads 里留下分片进度
+$p = Start-Process "$e2e\app\FileUploader.exe" -ArgumentList "`"$e2e\files\巨大文件.bin`"" -PassThru
+Start-Sleep -Seconds 5; Stop-Process -Id $p.Id -Force
+
+# 3. 重新打开（不带参数）：列表里出现「已中断 · 已传 xx%」，脚本点「继续」并等到「已上传」
+Start-Process "$e2e\app\FileUploader.exe"
+pwsh -File tools\uia-resume-test.ps1 -DumpTexts -DumpButtons
 ```
 
 ## 调试开关
@@ -140,3 +165,9 @@ dotnet run --project tools\FileUploader.Verify -- upload
 - **运行中的 exe 可以改名但不能覆盖写**：自更新用「拷成 `.new` → 当前 exe 改名 `.old` → `.new` 顶替 → 启动新版」。
 - **后台进程抢不到前台**（托盘点击）：`SetForegroundWindow` 会被前台锁定规则静默拒绝，需要 `AttachThreadInput` 挂到当前前台线程（见 `WindowForeground`）。
 - **单实例与自更新会打架**：自更新「先起新版再退自己」前必须交还实例锁，否则新版会当成第二份而退出。
+- **分片上传的签名要带上子资源**：`?uploads` / `?partNumber=N&uploadId=...` / `?uploadId=...` 都要进待签名字符串。OSS V1 只把**子资源**按名字排序拼进 CanonicalizedResource、**值不编码**（`?uploads` 连 `=` 都不要）；SigV4 则要求所有参数排序 + 严格编码、空值写成 `uploads=`。两者不能共用一套拼法（见 `ObjectStorageClient.BuildOssCanonicalResource` / `BuildSigV4CanonicalQuery`，`FileUploader.Verify multipart` 里有逐字符断言）。
+- **OSS 的 CompleteMultipartUpload 出错也回 200**：错误放在响应体里（`<Error>…`）。只看状态码会把"没合并成功"当成成功，链接打开是 404 —— 现在成功分支也会扫一遍响应体。
+- **同一份 HttpClient 复用的请求体必须自己截断**：`ProgressStreamContent` 原来一直读到 `Stream` 末尾，分片上传时底层是同一个文件的 FileStream，第二片会把后面几片一起塞进去（Content-Length 对不上，连接被服务端掐断）。现在按 `length` 读到够数就停。
+- **续传必须沿用原来的对象键和分片大小**：键一变就是另一个对象，分片大小一变分片边界就跟服务端已经收下的那些对不上。所以会话里存了键和 `PartSize`，`UploadQueue` 在入队时先用 `MultipartUploader.FindPending` 找有没有可续传的会话并沿用它的键。
+- **RustFS 1.0.6 + Windows 绑挂目录（`-v ${PWD}\...:/data`）能初始化、能传分片，但 CompleteMultipartUpload 一定回 404 `NoSuchKey`**：`multipart/` 和 `multipart-index-v1/` 都在，`.mpu-completions/…/original.xl.meta` 也写了，就是合并不成功；换成 Docker 命名卷（或 Linux 主机）立刻正常。所以本地验证分片上传用命名卷；简单的 `PUT Object` 不受影响，这就是当初用绑挂目录也能跑通上传、下载、预签名链接的原因。
+- **RustFS 的 Abort 之后目录还在**：`.rustfs.sys/multipart/<hash>` 可能留一个空壳，但语义上已经没了（再拿这个 uploadId 去 Complete 会回 `NoSuchUpload`）。别拿"目录还在"当成没清掉。
