@@ -1,8 +1,11 @@
-# 真实 GitHub 的「检查更新 → 下载 → 替换 → 重启」验证（用留档的 0.2.0 便携副本）。
+# 真实 GitHub 的「检查更新 → 下载」验证（对着一个留档的旧版副本跑）。
 #
 #   pwsh -NoProfile -File <本文件> -Exe "$env:TEMP\fu-app-v0.2.0\FileUploader.exe"
+#   pwsh -NoProfile -File <本文件> -Exe (Join-Path $env:LOCALAPPDATA 'Programs\FileUploader\FileUploader.exe')
 #
-# 注意：会真下载 ~93 MB 的 Release 资产并替换该副本里的 exe（副本可随时重做）。
+# 注意：会真下载 ~90 MB 的 Release 资产。
+#   * 便携副本：只下载（exe 不变，新文件落在 exe 旁边的 update-<版本>\）
+#   * 安装版  ：下载安装包 → 静默升级 → 自动重启（exe 版本号会变）
 param(
     [Parameter(Mandatory = $true)][string]$Exe,
     [string]$ExpectVersion = '0.2.1',
@@ -76,41 +79,78 @@ if ($header -notlike '*发现新版本*') {
     exit 1
 }
 
+# 应用自己决定怎么更新：安装版是「立即更新并重启」，便携版是「下载新版」。
 $apply = Find-Button $settings '立即更新并重启'
-if (-not $apply) { throw '找不到「立即更新并重启」' }
-$apply.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-Write-Output '已点击「立即更新并重启」，开始下载（真实网络，可能几十秒到几分钟）'
-
-$newProc = $null
-for ($i = 0; $i -lt 480 -and -not $newProc; $i++) {
-    Start-Sleep -Seconds 1
-    if ($i % 15 -eq 0) {
-        $probe = @(Get-Process FileUploader -ErrorAction SilentlyContinue)
-        $texts = @()
-        if ($probe.Count -gt 0) {
-            try { $texts = Get-Texts (Find-Window '设置') } catch { }
-        }
-        $progressText = $texts | Where-Object { $_ -like '*正在下载*' -or $_ -match '失败' } | Select-Object -First 1
-        Write-Output ("  [{0}s] 进程={1} {2}" -f $i, $probe.Count, $progressText)
-    }
-    $newProc = Get-Process FileUploader -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $appProc.Id } | Select-Object -First 1
+$portable = $false
+if (-not $apply) {
+    $apply = Find-Button $settings '下载新版'
+    $portable = $true
 }
+if (-not $apply) { throw '既找不到「立即更新并重启」也找不到「下载新版」' }
 
-Start-Sleep -Seconds 3
-$running = @(Get-Process FileUploader -ErrorAction SilentlyContinue)
-Write-Output ("旧进程还在: " + [bool]($running | Where-Object { $_.Id -eq $appProc.Id }))
-Write-Output ("新进程: " + (($running | ForEach-Object { "pid=$($_.Id)" }) -join ', '))
-
-$after = (Get-Item $Exe).VersionInfo
-Write-Output ("更新后版本: FileVersion={0} ProductVersion={1}" -f $after.FileVersion, $after.ProductVersion)
-$sha = (Get-FileHash $Exe -Algorithm SHA256).Hash.ToLowerInvariant()
-Write-Output ("更新后 exe SHA256: $sha")
+Write-Output ("已点击：{0}（{1}）" -f $apply.Current.Name, $(if ($portable) { '便携版：只下载，不替换' } else { '安装版：静默升级并重启' }))
+$apply.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 
 $ok = $true
-if ($after.FileVersion -notlike "$ExpectVersion*") { Write-Output "FAIL 版本号不是 $ExpectVersion"; $ok = $false } else { Write-Output "PASS 版本号 $($after.FileVersion)（期望 $ExpectVersion）" }
-if ($ExpectSha -and $sha -ne $ExpectSha) { Write-Output 'FAIL SHA256 与 Release 不一致'; $ok = $false }
-elseif ($ExpectSha) { Write-Output 'PASS SHA256 与 Release 资产一致' }
-if (-not $newProc) { Write-Output 'FAIL 没有起新进程'; $ok = $false } else { Write-Output 'PASS 已重启新版本' }
+$exeBefore = (Get-Item $Exe).VersionInfo.FileVersion
+$shaBefore = (Get-FileHash $Exe -Algorithm SHA256).Hash.ToLowerInvariant()
+
+if ($portable) {
+    # 便携版：等「新版已下载」，然后核对下载下来的文件
+    $texts = @()
+    for ($i = 0; $i -lt 480; $i++) {
+        Start-Sleep -Seconds 1
+        $texts = @()
+        $win = Find-Window '设置'
+        if ($win) { try { $texts = Get-Texts $win } catch { } }
+        if ($i % 15 -eq 0) {
+            $progress = $texts | Where-Object { $_ -like '*正在下载*' -or $_ -match '失败' } | Select-Object -First 1
+            Write-Output ("  [{0}s] {1}" -f $i, $progress)
+        }
+        if ($texts -match '新版已下载') { break }
+        if ($texts -match '校验失败|更新失败') { break }
+    }
+
+    if ($texts -notmatch '新版已下载') {
+        Write-Output ('FAIL 没有出现「新版已下载」：' + (($texts | Where-Object { $_ -match '失败|校验|目录' }) -join ' / '))
+        $ok = $false
+    }
+    else {
+        Write-Output 'PASS 显示「新版已下载」'
+        $downloaded = Get-ChildItem (Join-Path (Split-Path $Exe) 'update-*') -Filter '*.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $downloaded) { Write-Output 'FAIL 没在 exe 旁边找到 update-<版本>\ 里的新版'; $ok = $false }
+        else { Write-Output ("PASS 新版位置：{0}（{1:N1} MB）" -f $downloaded.FullName, ($downloaded.Length / 1MB)) }
+    }
+
+    $shaAfter = (Get-FileHash $Exe -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($shaAfter -eq $shaBefore) { Write-Output 'PASS 便携版没有被替换（exe 哈希不变）' } else { Write-Output 'FAIL 便携版的 exe 被改动了'; $ok = $false }
+}
+else {
+    # 安装版：等旧进程退出、安装器把新程序拉起来
+    $newProc = $null
+    for ($i = 0; $i -lt 480 -and -not $newProc; $i++) {
+        Start-Sleep -Seconds 1
+        if ($i % 15 -eq 0) {
+            $probe = @(Get-Process FileUploader -ErrorAction SilentlyContinue)
+            $texts = @()
+            if ($probe.Count -gt 0) { try { $texts = Get-Texts (Find-Window '设置') } catch { } }
+            $progressText = $texts | Where-Object { $_ -like '*正在下载*' -or $_ -match '失败' } | Select-Object -First 1
+            Write-Output ("  [{0}s] 进程={1} {2}" -f $i, $probe.Count, $progressText)
+        }
+        $newProc = Get-Process FileUploader -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $appProc.Id } | Select-Object -First 1
+    }
+
+    Start-Sleep -Seconds 3
+    $after = (Get-Item $Exe).VersionInfo
+    $sha = (Get-FileHash $Exe -Algorithm SHA256).Hash.ToLowerInvariant()
+    Write-Output ("更新后版本: {0}（原 {1}）" -f $after.FileVersion, $exeBefore)
+    Write-Output ("更新后 exe SHA256: {0}" -f $sha)
+
+    if ($after.FileVersion -eq $exeBefore) { Write-Output 'WARN 版本号没变（旧版本升级到同版本时会这样）' }
+    if ($ExpectVersion -and $after.FileVersion -notlike "$ExpectVersion*") { Write-Output "FAIL 版本号不是 $ExpectVersion"; $ok = $false }
+    if ($ExpectSha -and $sha -ne $ExpectSha) { Write-Output 'FAIL SHA256 与 Release 不一致'; $ok = $false }
+    if (-not $newProc) { Write-Output 'FAIL 没有起新进程'; $ok = $false } else { Write-Output 'PASS 静默升级后程序被重新拉起来' }
+}
 
 Write-Output $(if ($ok) { 'RESULT PASS' } else { 'RESULT FAIL' })
 if (-not $ok) { exit 1 }

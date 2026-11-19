@@ -1169,6 +1169,19 @@ void RunUpdateChecks()
     Check("解析：发布页链接", parsed.ReleasePageUrl ?? "", "https://github.com/qianshipoi/FileUploader/releases/tag/v0.3.0");
     Check("解析：同版本 → 已是最新", UpdateChecker.Parse("0.3.0", json).Status.ToString(), "UpToDate");
     Check("解析：没有 tag 时判失败", UpdateChecker.Parse("0.2.0", "{\"assets\":[]}").Status.ToString(), "Failed");
+
+    // 0.4.0 起 Release 里多一个安装包（setup.exe）：安装版走它，便携版仍用 win-x64.exe。
+    var jsonWithSetup = json.Replace(
+        "  \"assets\": [",
+        "  \"assets\": [" + Environment.NewLine +
+        "    { \"name\": \"FileUploader-0.3.0-setup.exe\", \"size\": 87000000, \"digest\": \"sha256:" + new string('C', 64) + "\", \"browser_download_url\": \"https://example.com/setup.exe\" },");
+    var parsedSetup = UpdateChecker.Parse("0.2.0", jsonWithSetup);
+    Check("解析：认出安装包资产", parsedSetup.HasInstaller ? "ok" : "missing", "ok");
+    Check("解析：安装版用 setup.exe", parsedSetup.InstallerName ?? "", "FileUploader-0.3.0-setup.exe");
+    Check("解析：安装包下载地址", parsedSetup.InstallerUrl ?? "", "https://example.com/setup.exe");
+    Check("解析：安装包 digest 归一化成小写", parsedSetup.InstallerSha256 ?? "", new string('c', 64));
+    Check("解析：同时仍取到便携版", parsedSetup.AssetName ?? "", "FileUploader-0.3.0-win-x64.exe");
+    Check("解析：没有安装包时不误判", parsed.HasInstaller ? "yes" : "no", "no");
 }
 
 void WriteSettingsFile(string? targetPath = null)
