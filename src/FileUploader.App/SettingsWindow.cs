@@ -1,5 +1,6 @@
 using PropertyChangedEventArgs = System.ComponentModel.PropertyChangedEventArgs;
 using System.Diagnostics;
+using System.Globalization;
 using FileUploader.Core;
 using FileUploader.Core.Storage;
 using Microsoft.UI.Reactor;
@@ -11,11 +12,56 @@ using static Microsoft.UI.Reactor.Factories;
 namespace FileUploader.App;
 
 /// <summary>
-/// 独立的设置窗口（存储 + 启动行为）。修改立即生效并自动保存，主窗口实时同步。
+/// 独立的设置窗口：左边是分类（连接 / 上传 / 启动 / 关于），右边一页一屏，
+/// 排法照 Windows 设置来 —— 页头大标题、卡片里一行一个设置、行间一条细分隔线。
+/// <para>
+/// 保存刻意分成两类：
+/// <b>开关与下拉框</b>（静默启动、开机自启、链接类型、协议……）点了就生效、立即写盘；
+/// <b>输入框</b>（Endpoint、桶名、密钥、前缀、域名、有效期）只改内存里的草稿，点「保存」才写盘。
+/// 原来每敲一个字符就写一次 settings.json：既没必要（用户可能还在改），
+/// 又会让主窗口在上传时读到一个写了一半的 Endpoint。
+/// </para>
+/// <para>
+/// 草稿与已保存值的差异就是「未保存」：底部提示 + 保存按钮点亮；
+/// 带着未保存内容点「关闭」或窗口 X 会先问一句（保存并关闭 / 不保存 / 取消）。
+/// </para>
 /// </summary>
 public sealed class SettingsWindow : Component
 {
-    private AppSettings _settings = SettingsState.Current.Value;
+    private static readonly string[] PageTitles = ["连接", "上传", "启动", "关于"];
+
+    private static readonly string[] PageDescriptions =
+    [
+        "文件传到哪个桶、用哪个账号。",
+        "对象键怎么排、复制出来的链接是什么样、上传成功后做什么。",
+        "开机、托盘，以及右下角那个拖拽气泡。",
+        "版本与检查更新，配置和数据文件放在哪儿。",
+    ];
+
+    // Segoe Fluent Icons 的字形：地球 / 上传 / 齿轮 / 问号
+    private static readonly string[] PageGlyphs = ["\uE774", "\uE898", "\uE713", "\uE946"];
+
+    /// <summary>界面上正在编辑的配置（含还没保存的输入）。</summary>
+    private AppSettings _draft = SettingsState.Current.Value;
+
+    private Action<AppSettings> _setDraft = _ => { };
+
+    /// <summary>已经写进磁盘配置的那一份；与 <see cref="_draft"/> 不等就是「有未保存的修改」。</summary>
+    private AppSettings _saved = SettingsState.Current.Value;
+
+    private Action<AppSettings> _setSaved = _ => { };
+
+    private int _page;
+    private Action<int> _setPage = _ => { };
+
+    /// <summary>「还有输入没保存」对话框是否打开。</summary>
+    private bool _closeAskOpen;
+
+    private Action<bool> _setCloseAskOpen = _ => { };
+
+    /// <summary>用户已经在对话框里选过「保存并关闭 / 不保存」，关闭守卫要放行这一次。</summary>
+    private bool _closeConfirmed;
+
     private bool _testing;
     private Action<bool> _setTesting = _ => { };
     private Notice? _notice;
@@ -71,8 +117,10 @@ public sealed class SettingsWindow : Component
     /// <inheritdoc />
     public override Element Render()
     {
-        var (settings, setSettings) = UseState(SettingsState.Current.Value, threadSafe: true);
-        var (saveState, setSaveState) = UseState((SettingsState.Current.IsDirty, SettingsState.Current.LastSavedAt), threadSafe: true);
+        var (draft, setDraft) = UseState(SettingsState.Current.Value, threadSafe: true);
+        var (saved, setSaved) = UseState(SettingsState.Current.Value, threadSafe: true);
+        var (page, setPage) = UseState(0);
+        var (closeAskOpen, setCloseAskOpen) = UseState(false);
         var (testing, setTesting) = UseState(false, threadSafe: true);
         var (notice, setNotice) = UseState<Notice?>(SettingsState.LoadWarning is { } warning ? Notice.Error(warning) : null, threadSafe: true);
 
@@ -87,7 +135,14 @@ public sealed class SettingsWindow : Component
         var (downloadedPath, setDownloadedPath) = UseState<string?>(null, threadSafe: true);
         var (downloadedSha, setDownloadedSha) = UseState<string?>(null, threadSafe: true);
 
-        _settings = settings;
+        _draft = draft;
+        _setDraft = setDraft;
+        _saved = saved;
+        _setSaved = setSaved;
+        _page = page;
+        _setPage = setPage;
+        _closeAskOpen = closeAskOpen;
+        _setCloseAskOpen = setCloseAskOpen;
         _testing = testing;
         _setTesting = setTesting;
         _notice = notice;
@@ -128,14 +183,18 @@ public sealed class SettingsWindow : Component
             },
             Array.Empty<object>());
 
-        // 跟随全局状态：主窗口改了配置这里也会同步；保存状态变化也会刷新。
+        // 跟随全局状态：主窗口/启动同步改了配置这里也会同步（只在没有草稿改动时覆盖输入框）。
         UseEffect(
             () =>
             {
                 void Handler(object? sender, PropertyChangedEventArgs e)
                 {
-                    setSettings(SettingsState.Current.Value);
-                    setSaveState((SettingsState.Current.IsDirty, SettingsState.Current.LastSavedAt));
+                    var current = SettingsState.Current.Value;
+                    setSaved(current);
+                    if (_draft == _saved)
+                    {
+                        setDraft(current);
+                    }
                 }
 
                 SettingsState.Current.PropertyChanged += Handler;
@@ -143,21 +202,34 @@ public sealed class SettingsWindow : Component
             },
             Array.Empty<object>());
 
+        // 窗口 X / Alt+F4：有没保存的输入就先拦下来问一句。
+        // 注意这是"钩子"：必须无条件地在 Render 里直接调用（放进 UseEffect 会被分析器拦下，且顺序不稳定）。
+        UseClosingGuard(CanCloseWindow);
+
+        // 导航栏之外只剩内容区：上面滚动（提示条 + 页头 + 卡片），下面固定一条保存/关闭。
+        var content = Grid(
+            rows: [GridSize.Star(), GridSize.Auto],
+            columns: [GridSize.Star()],
+            children:
+            [
+                BuildContent().Grid(row: 0),
+                BuildFooter().Grid(row: 1).Margin(24, 8, 24, 16),
+            ])
+            .Background(ThemeBrushes.PageBackground);
+
         return Grid(
-                rows: [GridSize.Auto, GridSize.Star(), GridSize.Auto],
+                rows: [GridSize.Star()],
                 columns: [GridSize.Star()],
                 children:
                 [
-                    BuildHeader().Grid(row: 0).Margin(0, 0, 0, 16),
-                    ScrollView(VStack(16, BuildForm())).Grid(row: 1).Margin(0, 0, 0, 12),
-                    BuildFooter(saveState).Grid(row: 2).Margin(0, 4, 0, 0),
+                    BuildNav(content).Grid(row: 0),
 
-                    // 两个模态对话框（详情 / 下载进度）：挂在窗口树里，由 IsOpen 控制显示。
+                    // 三个模态对话框：挂在窗口树里，由 IsOpen 控制显示。
                     SafeDialog(BuildUpdateDetailDialog).Grid(row: 0, column: 0),
                     SafeDialog(BuildUpdateProgressDialog).Grid(row: 0, column: 0),
+                    SafeDialog(BuildCloseAskDialog).Grid(row: 0, column: 0),
                 ])
-            .Padding(20)
-            .Background(Theme.SolidBackground);
+            .Background(ThemeBrushes.PageBackground);
     }
 
     /// <summary>
@@ -177,185 +249,274 @@ public sealed class SettingsWindow : Component
         }
     }
 
-    private Element BuildHeader()
-    {        var subtitle = new[]
+    /// <summary>
+    /// 顶部只放提示条（保存出错、导入提示之类），没有提示时返回 null：
+    /// 窗口标题栏已经写着「设置」，页头交给每一页自己的大标题。
+    /// </summary>
+    private Element? BuildNoticeBlock()
+    {
+        var rows = new List<Element>();
+        if (_notice is not null)
         {
-            _settings.Bucket,
-            _settings.NormalizedEndpoint,
-            _settings.Protocol == StorageProtocol.AliyunOss ? "阿里云 OSS" : "S3 兼容",
-        }.Where(s => !string.IsNullOrWhiteSpace(s));
+            rows.Add(InfoBar()
+                .Set(bar =>
+                {
+                    bar.Message = _notice!.Message;
+                    bar.Severity = _notice.IsError ? InfoBarSeverity.Error : InfoBarSeverity.Success;
+                    bar.IsOpen = true;
+                })
+                .Closed(() => _setNotice(null)));
+        }
 
-        return VStack(
-            4,
-            TextBlock("设置").FontSize(22).SemiBold(),
-            TextBlock(_settings.IsConfigured ? string.Join(" · ", subtitle) : "填写 Endpoint、桶名和密钥后即可拖拽上传")
-                .FontSize(12)
-                .Foreground(Theme.SecondaryText),
-            _notice is null
-                ? Empty()
-                : InfoBar()
-                    .Set(bar =>
-                    {
-                        bar.Message = _notice!.Message;
-                        bar.Severity = _notice.IsError ? InfoBarSeverity.Error : InfoBarSeverity.Success;
-                        bar.IsOpen = true;
-                    })
-                    .Closed(() => _setNotice(null))
-                    .Margin(0, 6, 0, 0),
-            SettingsExchange.ImportFileExists
-                ? HStack(
-                        8,
-                        TextBlock($"exe 同目录存在 {SettingsExchange.FileName}（加密导出文件，启动时会导入）。")
-                            .FontSize(11)
-                            .Foreground(Theme.SystemCaution)
-                            .TextWrapping(),
-                        Button("删除它", DeleteImportFile).SubtleButton())
-                    .Margin(0, 6, 0, 0)
-                : Empty());
+        if (SettingsExchange.ImportFileExists)
+        {
+            rows.Add(HStack(
+                8,
+                TextBlock($"exe 同目录存在 {SettingsExchange.FileName}（加密导出文件，启动时会导入）。")
+                    .FontSize(12)
+                    .Foreground(Theme.SystemCaution)
+                    .TextWrapping(),
+                Button("删除它", DeleteImportFile).SubtleButton()));
+        }
+
+        return rows.Count == 0 ? null : VStack(8, rows.ToArray());
     }
 
     /// <summary>
-    /// 三张卡片按「连接 → 上传与链接 → 启动与托盘」排：常用的在上、少用的不再藏进折叠区，
-    /// 相关字段两列并排，一屏内能看完（原来一长串单列要滚动才能看到高级设置）。
+    /// 左侧导航直接用 WinUI 原生的 <c>NavigationView</c>：选中条、悬停、键盘导航、
+    /// 窗口变窄时自动收成图标栏，全都是系统样式（这里自己拼一排按钮怎么调都差一口气）。
     /// </summary>
-    private Element BuildForm() =>
-        VStack(
-            16,
-            BuildStorageCard(),
-            BuildLinkCard(),
-            BuildBehaviorCard(),
-            BuildAboutCard(),
-            TextBlock($"密钥用 Windows DPAPI 加密后保存在 {SettingsStore.FilePath}，仅当前 Windows 账户可解密。" +
-                      (AppPaths.IsPortable ? "（便携模式：配置随 exe 所在目录）" : string.Empty))
-                .FontSize(11)
+    private Element BuildNav(Element content)
+    {
+        var items = new NavigationViewItemData[PageTitles.Length];
+        for (var i = 0; i < PageTitles.Length; i++)
+        {
+            items[i] = NavItem(PageTitles[i], PageGlyphs[i], i.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return NavigationView(items, content) with
+        {
+            SelectedTag = _page.ToString(CultureInfo.InvariantCulture),
+            OnSelectedTagChanged = OnNavTagChanged,
+            PaneTitle = "设置",
+            IsSettingsVisible = false,
+            PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
+            IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
+            IsPaneToggleButtonVisible = false,
+            AlwaysShowHeader = false,
+            OpenPaneLength = 180,
+            CompactModeThresholdWidth = 640,
+            ExpandedModeThresholdWidth = 900,
+        };
+    }
+
+    private void OnNavTagChanged(string? tag)
+    {
+        if (int.TryParse(tag, NumberStyles.Integer, CultureInfo.InvariantCulture, out var page)
+            && page >= 0
+            && page < PageTitles.Length
+            && page != _page)
+        {
+            _setPage(page);
+        }
+    }
+
+    private Element BuildContent()
+    {
+        var items = new List<Element>();
+        if (BuildNoticeBlock() is { } notice)
+        {
+            items.Add(notice);
+        }
+
+        items.Add(VStack(
+            4,
+            TextBlock(PageTitles[_page]).FontSize(24).SemiBold(),
+            TextBlock(PageDescriptions[_page]).FontSize(12).Foreground(Theme.SecondaryText).TextWrapping()));
+        items.Add(BuildPageBody());
+
+        return ScrollView(VStack(16, items.ToArray())).Padding(24, 16, 24, 8);
+    }
+
+    private Element BuildPageBody() => _page switch
+    {
+        1 => BuildUploadPage(),
+        2 => BuildStartupPage(),
+        3 => BuildAboutPage(),
+        _ => BuildConnectionPage(),
+    };
+
+    private Element BuildConnectionPage()
+    {
+        var rows = new List<Element>
+        {
+            Row(
+                "协议",
+                null,
+                ComboBox(["阿里云 OSS（V1 签名）", "S3 兼容（SigV4）"], (int)_draft.Protocol, OnProtocolChanged)
+                    .AutomationName("协议")),
+            Row(
+                "Endpoint",
+                "不含桶名",
+                TextBox(_draft.Endpoint, value => SetDraft(s => s with { Endpoint = value }))
+                    .PlaceholderText("oss-cn-hangzhou.aliyuncs.com")
+                    .AutomationName("Endpoint")),
+            Row(
+                "桶名（Bucket）",
+                null,
+                TextBox(_draft.Bucket, value => SetDraft(s => s with { Bucket = value }))
+                    .PlaceholderText("my-bucket")
+                    .AutomationName("桶名（Bucket）")),
+        };
+
+        // Region 只对 SigV4 有意义：阿里云 V1 签名用不上，不显示，少一个要理解的字段。
+        if (_draft.Protocol == StorageProtocol.S3Compatible)
+        {
+            rows.Add(Row(
+                "Region",
+                "SigV4 用；S3 兼容服务一般 us-east-1",
+                TextBox(_draft.Region, value => SetDraft(s => s with { Region = value }))
+                    .PlaceholderText("us-east-1")
+                    .AutomationName("Region")));
+        }
+
+        rows.Add(Row(
+            "AccessKey ID",
+            null,
+            TextBox(_draft.AccessKeyId, value => SetDraft(s => s with { AccessKeyId = value }))
+                .PlaceholderText("LTAI...")
+                .AutomationName("AccessKey ID")));
+        rows.Add(Row(
+            "AccessKey Secret",
+            "DPAPI 加密保存",
+            PasswordBox(_draft.AccessKeySecret, value => SetDraft(s => s with { AccessKeySecret = value }), "填写 AccessKey Secret")
+                .AutomationName("AccessKey Secret")));
+        rows.Add(Toggle(
+            "使用 HTTPS",
+            "http:// 只适合本机或内网服务",
+            _draft.UseHttps,
+            value => ApplyLive(s => s with { UseHttps = value })));
+        rows.Add(Toggle(
+            "路径风格地址",
+            "MinIO / RustFS 一般要打开",
+            _draft.PathStyle,
+            value => ApplyLive(s => s with { PathStyle = value })));
+        rows.Add(Row("连接测试", "桶不存在会自动创建", BuildTestButton(), controlWidth: null));
+
+        return SettingsCard("存储服务", "Endpoint 与桶名决定文件传到哪里。", rows.ToArray());
+    }
+
+    private Element BuildUploadPage()
+    {
+        // 用固定时间与固定防重名段生成示例，免得每次重绘都跳一下。
+        var keySample = ObjectKey.Build(_draft, "截图.png", null, DateTimeOffset.Now, "153012-a1b2c3d4");
+
+        var keyCard = SettingsCard(
+            "对象键",
+            "决定文件在桶里叫什么名字。",
+            Row(
+                "对象键前缀（可选）",
+                "例如 images",
+                TextBox(_draft.KeyPrefix, value => SetDraft(s => s with { KeyPrefix = value }))
+                    .PlaceholderText("images")
+                    .AutomationName("对象键前缀")),
+            Toggle(
+                "按日期分组",
+                "插入 yyyy/MM/dd 目录",
+                _draft.UseDateFolder,
+                value => ApplyLive(s => s with { UseDateFolder = value })),
+            TextBlock("例：" + keySample)
+                .FontSize(12)
                 .Foreground(Theme.TertiaryText)
-                .TextWrapping());
+                .IsTextSelectionEnabled(true)
+                .TextWrapping()
+                .Padding(0, 0, 0, 12));
 
-    private Element BuildStorageCard()
-    {
-        var httpsBox = CheckBox((bool?)_settings.UseHttps, value => SetField(s => s with { UseHttps = value }), "使用 HTTPS");
+        var linkRows = new List<Element>
+        {
+            Row(
+                "链接类型",
+                null,
+                ComboBox(
+                        ["签名链接（私有桶可直接下载，会过期）", "直链（需桶或对象公共读）"],
+                        (int)_draft.UrlMode,
+                        OnUrlModeChanged)
+                    .AutomationName("链接类型")),
+        };
 
-        var pathStyleBox = CheckBox(
-            (bool?)_settings.PathStyle,
-            value => SetField(s => s with { PathStyle = value }),
-            "路径风格访问（endpoint/bucket/key）");
-
-        // Region 只对 SigV4 有意义，选阿里云 V1 签名时不显示，少一个要理解的字段。
-        var regionRow = _settings.Protocol == StorageProtocol.S3Compatible
-            ? Pair(
-                TextBox(_settings.Region, value => SetField(s => s with { Region = value }))
-                    .Header("Region（SigV4 用）")
-                    .PlaceholderText("us-east-1"),
-                pathStyleBox.VAlign(VerticalAlignment.Bottom).Margin(0, 0, 0, 8))
-            : pathStyleBox.VAlign(VerticalAlignment.Center);
-
-        return Section(
-            "存储服务",
-            "Endpoint 与桶名决定文件传到哪里；密钥只在本机加密保存。",
-            VStack(
-                12,
-                Pair(
-                    ComboBox(["阿里云 OSS（V1 签名）", "S3 兼容（SigV4）"], (int)_settings.Protocol, OnProtocolChanged).Header("协议"),
-                    httpsBox.VAlign(VerticalAlignment.Bottom).Margin(0, 0, 0, 8)),
-                TextBox(_settings.Endpoint, value => SetField(s => s with { Endpoint = value }))
-                    .Header("Endpoint")
-                    .PlaceholderText("oss-cn-hangzhou.aliyuncs.com"),
-                Pair(
-                    TextBox(_settings.Bucket, value => SetField(s => s with { Bucket = value }))
-                        .Header("桶名（Bucket）")
-                        .PlaceholderText("my-bucket"),
-                    TextBox(_settings.AccessKeyId, value => SetField(s => s with { AccessKeyId = value }))
-                        .Header("AccessKey ID")
-                        .PlaceholderText("LTAI...")),
-                PasswordBox(_settings.AccessKeySecret, value => SetField(s => s with { AccessKeySecret = value }), "AccessKey Secret")
-                    .Header("AccessKey Secret"),
-                regionRow));
-    }
-
-    private Element BuildLinkCard()
-    {
-        var expireRow = _settings.UrlMode == UrlMode.Signed
-#pragma warning disable REACTOR_A11Y_003 // 标题通过工厂参数传入，分析器识别不到
-            ? NumberBox(_settings.SignedUrlExpireDays, OnExpireDaysChanged, "签名有效期（天）")
-                .Range(1, ObjectUrlBuilder.MaxExpireDays)
-                .SpinButtons()
+        if (_draft.UrlMode == UrlMode.Signed)
+        {
+#pragma warning disable REACTOR_A11Y_003 // 标题在左边的 Row 里，分析器看不到
+            linkRows.Add(Row(
+                "签名有效期（天）",
+                "最长 7 天，到期失效",
+                NumberBox(_draft.SignedUrlExpireDays, OnExpireDaysChanged)
+                    .Range(1, ObjectUrlBuilder.MaxExpireDays)
+                    .SpinButtons()
+                    .AutomationName("签名有效期"),
+                controlWidth: 160));
 #pragma warning restore REACTOR_A11Y_003
-            : Empty();
+        }
+        else
+        {
+            linkRows.Add(Row(
+                "自定义域名（可选）",
+                "仅直链生效，例如 https://cdn.example.com",
+                TextBox(_draft.PublicBaseUrl, value => SetDraft(s => s with { PublicBaseUrl = value }))
+                    .PlaceholderText("https://cdn.example.com")
+                    .AutomationName("自定义域名")));
+        }
 
-        var customDomainRow = _settings.UrlMode == UrlMode.Direct
-            ? TextBox(_settings.PublicBaseUrl, value => SetField(s => s with { PublicBaseUrl = value }))
-                .Header("自定义域名（可选）")
-                .PlaceholderText("https://cdn.example.com")
-            : Empty();
+        linkRows.Add(Toggle(
+            "自动复制链接",
+            "上传成功后把链接写进剪贴板。",
+            _draft.AutoCopyUrl,
+            value => ApplyLive(s => s with { AutoCopyUrl = value })));
+        linkRows.Add(Toggle(
+            "多个文件打包成 ZIP 上传",
+            "多文件时先打成一个 zip；单文件直传",
+            _draft.ZipBatchUpload,
+            value => ApplyLive(s => s with { ZipBatchUpload = value })));
 
-        var keyPrefixRow = TextBox(_settings.KeyPrefix, value => SetField(s => s with { KeyPrefix = value }))
-            .Header("对象键前缀（可选）")
-            .PlaceholderText("images");
+        if (_draft.UrlMode == UrlMode.Direct)
+        {
+            linkRows.Add(Toggle(
+                "对象设为公共读",
+                "上传时给对象加 public-read ACL；直链要求公共读。",
+                _draft.PublicReadObject,
+                value => ApplyLive(s => s with { PublicReadObject = value })));
+        }
 
-        var urlModeCombo = ComboBox(
-                ["签名链接（私有桶可直接下载，会过期）", "直链（需桶或对象公共读）"],
-                (int)_settings.UrlMode,
-                OnUrlModeChanged)
-            .Header("链接类型");
+        var linkCard = SettingsCard("链接与上传", "签名链接还是直链，以及上传成功后做什么。", linkRows.ToArray());
 
-        return Section(
-            "上传与链接",
-            "对象键决定文件在桶里的位置，链接类型决定复制出来的是签名链接还是直链。",
-            VStack(
-                12,
-                // 只在该选项真的存在时并排：否则右半列留空，看着像少了东西。
-                _settings.UrlMode == UrlMode.Signed ? Pair(urlModeCombo, expireRow) : urlModeCombo,
-                // 直链模式没有签名，这段说明就没意义了。
-                _settings.UrlMode == UrlMode.Signed
-                    ? TextBlock("签名有效期最长 7 天（阿里云与 S3 的一致限制），到期自动失效；每次复制都会重新生成。")
-                        .FontSize(11)
-                        .Foreground(Theme.TertiaryText)
-                        .TextWrapping()
-                    : Empty(),
-                _settings.UrlMode == UrlMode.Direct ? Pair(keyPrefixRow, customDomainRow) : keyPrefixRow,
-                Pair(
-                    CheckBox((bool?)_settings.AutoCopyUrl, value => SetField(s => s with { AutoCopyUrl = value }), "上传成功后自动复制链接"),
-                    CheckBox((bool?)_settings.UseDateFolder, value => SetField(s => s with { UseDateFolder = value }), "对象键按日期分组（yyyy/MM/dd）")),
-                CheckBox(
-                    (bool?)_settings.ZipBatchUpload,
-                    value => SetField(s => s with { ZipBatchUpload = value }),
-                    "多个文件打包成 ZIP 上传"),
-                // 说明一直在：开关关着的时候更需要知道它到底做什么，不能只在打开后才解释。
-                TextBlock("一次拖入的内容展开后多于一个文件时，先打成一个 zip 再上传（压缩包名字取第一个文件夹名，" +
-                          "没有文件夹时叫「打包.zip」）。只有一个文件时仍直接上传；临时 zip 传完自动删除。")
-                    .FontSize(11)
-                    .Foreground(Theme.TertiaryText)
-                    .TextWrapping(),
-                _settings.UrlMode == UrlMode.Direct
-                    ? CheckBox((bool?)_settings.PublicReadObject, value => SetField(s => s with { PublicReadObject = value }), "上传时把对象设为公共读（直链需要）")
-                    : Empty()));
+        return VStack(16, keyCard, linkCard);
     }
 
-    private Element BuildBehaviorCard() =>
-        Section(
+    private Element BuildStartupPage() =>
+        SettingsCard(
             "启动与托盘",
-            "关掉主窗口只是收进托盘，只有托盘菜单里的「退出」才真正结束进程。",
-            VStack(
-                4,
-                ToggleRow(
-                    "静默启动",
-                    "打开程序时不弹主窗口，只在托盘里待命；点托盘图标随时叫回来。下次启动生效。",
-                    _settings.StartSilently,
-                    value => SetField(s => s with { StartSilently = value })),
-                ToggleRow(
-                    "开机自启",
-                    "登录 Windows 后自动启动本程序（当前用户，不需要管理员）。和「静默启动」一起打开，就是开机直接进托盘。",
-                    _settings.StartWithWindows,
-                    OnStartWithWindowsChanged),
-                ToggleRow(
-                    "右下角拖拽浮现上传气泡",
-                    "拖文件到屏幕右下角就浮出气泡，松手即上传；关掉后不再创建那个隐形窗口，也不装拖拽探测器。",
-                    _settings.FlashDropEnabled,
-                    value => SetField(s => s with { FlashDropEnabled = value }))));
+            "关掉主窗口只是收进托盘；只有托盘菜单里的「退出」才真正结束进程。",
+            Toggle(
+                "静默启动",
+                "打开程序时不弹主窗口，只在托盘待命；点托盘图标随时叫回来。",
+                _draft.StartSilently,
+                value => ApplyLive(s => s with { StartSilently = value })),
+            Toggle(
+                "开机自启",
+                "登录后自动启动（当前用户，免管理员）；和「静默启动」一起开就是开机进托盘。",
+                _draft.StartWithWindows,
+                OnStartWithWindowsChanged),
+            Toggle(
+                "右下角拖拽浮现上传气泡",
+                "拖文件到右下角就浮出气泡，松手即上传；关掉后不再创建隐形窗口。",
+                _draft.FlashDropEnabled,
+                value => ApplyLive(s => s with { FlashDropEnabled = value })));
+
+    private Element BuildAboutPage() => VStack(16, BuildAboutCard(), BuildDataCard());
 
     /// <summary>
     /// 「关于与更新」：只留一行当前版本 + 状态摘要 + 按钮。
-    /// 更新详情（变更清单）和下载进度都放到对话框里，不再把卡片撑得很长。
+    /// 更新详情（变更清单）和下载进度都放到对话框里，不把卡片撑长。
     /// </summary>
     private Element BuildAboutCard()
     {
@@ -391,25 +552,67 @@ public sealed class SettingsWindow : Component
             .IsEnabled(!_checkingUpdate && !_applyingUpdate));
 #pragma warning restore REACTOR_A11Y_001
 
-        return Section(
+        var versionRow = Grid(
+            columns: [GridSize.Star(), GridSize.Auto],
+            rows: [GridSize.Auto],
+            children:
+            [
+                VStack(
+                        3,
+                        TextBlock($"当前版本 {AppVersion.Current}").FontSize(14),
+                        TextBlock(status).FontSize(12).Foreground(statusColor).TextWrapping())
+                    .Grid(column: 0)
+                    .Margin(0, 0, 20, 0)
+                    .VAlign(VerticalAlignment.Center),
+                HStack(8, actions.ToArray()).Grid(column: 1).VAlign(VerticalAlignment.Center),
+            ]).Padding(0, 10, 0, 10);
+
+        return SettingsCard(
             "关于与更新",
             _installKind == InstallKind.Installed
                 ? "安装版：更新会下载安装包、静默替换程序并自动重启，不用手动换文件。"
                 : "便携版：更新只把新版 exe 下载到程序旁边，绝不自动替换你手上这份。",
-            Grid(
-                columns: [GridSize.Star(), GridSize.Auto],
-                rows: [GridSize.Auto],
-                children:
-                [
-                    VStack(
-                            2,
-                            TextBlock($"当前版本 {AppVersion.Current}").FontSize(13),
-                            TextBlock(status).FontSize(11).Foreground(statusColor).TextWrapping())
-                        .Grid(column: 0)
-                        .Margin(0, 0, 12, 0)
-                        .VAlign(VerticalAlignment.Center),
-                    HStack(8, actions.ToArray()).Grid(column: 1),
-                ]));
+            versionRow);
+    }
+
+    /// <summary>配置文件放哪儿、怎么带走。</summary>
+    private Element BuildDataCard()
+    {
+        var pathRow = Grid(
+            columns: [GridSize.Star(), GridSize.Auto],
+            rows: [GridSize.Auto],
+            children:
+            [
+                VStack(
+                        3,
+                        TextBlock("配置文件").FontSize(14),
+                        TextBlock(SettingsStore.FilePath)
+                            .FontSize(12)
+                            .Foreground(Theme.SecondaryText)
+                            .IsTextSelectionEnabled(true)
+                            .TextWrapping())
+                    .Grid(column: 0)
+                    .Margin(0, 0, 20, 0)
+                    .VAlign(VerticalAlignment.Center),
+                HStack(
+                        8,
+                        Button("打开配置目录", OpenSettingsFolder).AutomationName("打开配置目录"),
+                        Button("导出配置", ExportSettings).AutomationName("导出配置"))
+                    .Grid(column: 1)
+                    .VAlign(VerticalAlignment.Center),
+            ]).Padding(0, 10, 0, 10);
+
+        return SettingsCard(
+            "配置与数据",
+            "密钥用 Windows DPAPI 加密后保存，只有当前 Windows 账户能解密。",
+            pathRow,
+            TextBlock("导出会在 exe 同目录生成 FileUploader.export.bin（AES-GCM 加密，含密钥）；" +
+                      "复制到对方机器上，第一次启动会自动导入并删掉这个文件。" +
+                      (AppPaths.IsPortable ? "便携模式：配置跟着 exe 所在目录走。" : string.Empty))
+                .FontSize(12)
+                .Foreground(Theme.TertiaryText)
+                .TextWrapping()
+                .Padding(0, 0, 0, 12));
     }
 
     /// <summary>「发现新版本」对话框：版本对照 + 变更清单 + 打开发布页。</summary>
@@ -775,114 +978,122 @@ public sealed class SettingsWindow : Component
             _setNotice(Notice.Error($"打不开发布页：{ex.Message}"));
         }
     }
-
-    /// <summary>一张卡片：卡片标题 + 一句说明 + 内容（间距比卡片之间更紧）。</summary>
-    private static Element Section(string title, string description, Element content) =>
-        Card(
+    /// <summary>带着未保存的输入点关闭/点 X 时问一句。</summary>
+    private Element BuildCloseAskDialog()
+    {
+        var dialog = new ContentDialogElement(
+            "有输入还没保存",
             VStack(
-                12,
-                VStack(
-                    2,
-                    TextBlock(title).FontSize(15).SemiBold(),
-                    TextBlock(description).FontSize(12).Foreground(Theme.SecondaryText).TextWrapping()),
-                content));
+                8,
+                TextBlock("Endpoint、桶名、密钥这些输入框里的改动不会自动保存。")
+                    .FontSize(12)
+                    .TextWrapping(),
+                TextBlock("「保存并关闭」会写进配置文件；「不保存」丢掉这次的输入，已经点过的开关不受影响。")
+                    .FontSize(12)
+                    .Foreground(Theme.SecondaryText)
+                    .TextWrapping()),
+            "保存并关闭")
+        {
+            SecondaryButtonText = "不保存",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+            IsOpen = _closeAskOpen,
+        };
+        return dialog.Closed(OnCloseAskClosed);
+    }
 
-    /// <summary>两列等宽并排（窄窗口下也比单列省滚动）。</summary>
-    private static Element Pair(Element left, Element right) =>
-        Grid(
-            columns: [GridSize.Star(), GridSize.Star()],
-            rows: [GridSize.Auto],
-            children:
-            [
-                left.Grid(column: 0).Margin(0, 0, 12, 0),
-                right.Grid(column: 1),
-            ]);
+    private void OnCloseAskClosed(ContentDialogResult result)
+    {
+        _setCloseAskOpen(false);
+        if (result == ContentDialogResult.Primary)
+        {
+            SaveDraft();
+            CloseNow();
+        }
+        else if (result == ContentDialogResult.Secondary)
+        {
+            // 丢弃这次的输入（已经生效的开关保留）。
+            _setDraft(_saved);
+            CloseNow();
+        }
+    }
 
-    /// <summary>设置页里最常见的开关行：左边标题 + 说明，右边一个开关。</summary>
-    private static Element ToggleRow(string title, string description, bool isOn, Action<bool> onChanged) =>
-        Grid(
+    /// <summary>
+    /// 一张设置卡片：标题 + 一句说明 + 若干行，行之间一条 1px 分隔线。
+    /// 这是 Windows 设置页的排法（卡片 8px 圆角、1px 描边由 <see cref="Factories.Card"/> 给）。
+    /// </summary>
+    private static Element SettingsCard(string title, string? description, params Element[] rows)
+    {
+        var header = new List<Element> { TextBlock(title).FontSize(14).SemiBold() };
+        if (!string.IsNullOrEmpty(description))
+        {
+            header.Add(TextBlock(description).FontSize(12).Foreground(Theme.SecondaryText).TextWrapping());
+        }
+
+        var body = new List<Element>();
+        for (var i = 0; i < rows.Length; i++)
+        {
+            if (i > 0)
+            {
+                body.Add(Divider());
+            }
+
+            body.Add(rows[i]);
+        }
+
+        return Card(
+            VStack(
+                0,
+                VStack(2, header.ToArray()).Margin(0, 0, 0, 4),
+                VStack(0, body.ToArray())));
+    }
+
+    /// <summary>卡片内行与行之间的 1px 分隔线。</summary>
+    private static Element Divider() => Border(null).Height(1).Background(Theme.DividerStroke);
+
+    /// <summary>
+    /// 一行设置：左边标题（可选一句灰字说明），右边控件。
+    /// <paramref name="controlWidth"/> 为 null 时按控件自身宽度靠右放（开关、按钮用这个）。
+    /// </summary>
+    private static Element Row(string title, string? description, Element control, double? controlWidth = 340)
+    {
+        Element right = control.Grid(column: 1).VAlign(VerticalAlignment.Center);
+        if (controlWidth is double width)
+        {
+            right = right.Width(width);
+        }
+
+        return Grid(
                 columns: [GridSize.Star(), GridSize.Auto],
                 rows: [GridSize.Auto],
                 children:
                 [
                     VStack(
                             2,
-                            TextBlock(title).FontSize(13),
-                            TextBlock(description).FontSize(11).Foreground(Theme.TertiaryText).TextWrapping())
+                            TextBlock(title).FontSize(14),
+                            description is null
+                                ? Empty()
+                                : TextBlock(description).FontSize(12).Foreground(Theme.SecondaryText).TextWrapping())
                         .Grid(column: 0)
-                        .Margin(0, 0, 12, 0)
+                        .Margin(0, 0, 24, 0)
                         .VAlign(VerticalAlignment.Center),
-                    ToggleSwitch(isOn, onChanged, string.Empty, string.Empty)
-                        .AutomationName(title)
-                        .Grid(column: 1),
+                    right,
                 ])
-            .Margin(0, 8, 0, 8);
-
-    /// <summary>
-    /// 开机自启的开关：先写注册表再落配置。
-    /// 写不进去（策略/权限）就把开关回滚成原状态并给红色提示 —— 不能让界面显示"已开启"而实际没有。
-    /// </summary>
-    private void OnStartWithWindowsChanged(bool enabled)
-    {
-        SetField(s => s with { StartWithWindows = enabled });
-        if (StartupRegistration.TrySet(enabled, out var error))
-        {
-            _setNotice(Notice.Info(enabled
-                ? "已加入开机自启（当前用户）；在任务管理器的「启动」页也能看到并关掉。"
-                : "已取消开机自启。"));
-            return;
-        }
-
-        SetField(s => s with { StartWithWindows = !enabled });
-        _setNotice(Notice.Error($"{(enabled ? "开启" : "关闭")}开机自启失败：{error}"));
+            .Padding(0, 10, 0, 10);
     }
 
-    private void OnUrlModeChanged(int index) =>
-        SetField(s => s with { UrlMode = index == 1 ? UrlMode.Direct : UrlMode.Signed });
-
-    private void OnExpireDaysChanged(double value) =>
-        SetField(s => s with { SignedUrlExpireDays = (int)Math.Clamp(Math.Round(value), 1, ObjectUrlBuilder.MaxExpireDays) });
-
-    private Element BuildFooter((bool IsDirty, DateTimeOffset? LastSavedAt) saveState)
-    {
-        var (isDirty, lastSavedAt) = saveState;
-        var saveText = isDirty
-            ? "有未保存的更改…"
-            : lastSavedAt is { } savedAt
-                ? $"已保存 {savedAt:HH:mm:ss}"
-                : "配置已加载";
-        var saveColor = isDirty ? Theme.SystemCaution : Theme.SecondaryText;
-
-        return Grid(
-            columns: [GridSize.Auto, GridSize.Star(), GridSize.Auto],
-            rows: [GridSize.Auto],
-            children:
-            [
-                HStack(
-                        10,
-                        BuildTestButton(),
-                        Button("打开配置目录", OpenSettingsFolder).SubtleButton(),
-                        Button("导出配置", ExportSettings).SubtleButton())
-                    .Grid(column: 0),
-                TextBlock(saveText)
-                    .FontSize(12)
-                    .Foreground(saveColor)
-                    .HAlign(HorizontalAlignment.Right)
-                    .VAlign(VerticalAlignment.Center)
-                    .Margin(0, 0, 12, 0)
-                    .Grid(column: 1),
-                HStack(
-                        8,
-                        Button("保存", SaveNow),
-                        Button("关闭", CloseWindow).AccentButton())
-                    .Grid(column: 2),
-            ]);
-    }
+    /// <summary>开关行：和 <see cref="Row"/> 同一套排法，右边放开关。</summary>
+    private static Element Toggle(string title, string description, bool isOn, Action<bool> onChanged) =>
+        Row(
+            title,
+            description,
+            ToggleSwitch(isOn, onChanged, string.Empty, string.Empty).AutomationName(title),
+            controlWidth: null);
 
     /// <summary>
     /// 「测试连接」按钮：图标（心电图）+ 文字的普通按钮。
     /// 测试中图标变成从左到右扫过的心电监护样式、文字变成「测试中…」并禁用按钮；
-    /// 测试结束自动恢复。右侧不再单独放 ProgressRing。
+    /// 测试结束自动恢复。
     /// </summary>
     private Element BuildTestButton() =>
         Button(
@@ -895,29 +1106,144 @@ public sealed class SettingsWindow : Component
                     .VAlign(VerticalAlignment.Center),
                 OnTestConnection)
             .AutomationName(_testing ? "正在测试连接" : "测试连接")
-            .ToolTip(_testing ? "正在连接存储服务…" : "用当前配置测一次连接（桶不存在会自动创建）");
+            .ToolTip(_testing ? "正在连接存储服务…" : "用输入框里的当前配置测一次连接（桶不存在会自动创建）");
+
+    private Element BuildFooter()
+    {
+        var dirty = _draft != _saved;
+        var status = dirty
+            ? "有输入还没保存"
+            : SettingsState.Current.LastSavedAt is { } savedAt
+                ? $"已保存 {savedAt:HH:mm:ss}"
+                : "配置已加载";
+
+        return VStack(
+            0,
+            Divider().Margin(0, 0, 0, 12),
+            Grid(
+                columns: [GridSize.Star(), GridSize.Auto],
+                rows: [GridSize.Auto],
+                children:
+                [
+                    TextBlock(status)
+                        .FontSize(12)
+                        .Foreground(dirty ? Theme.SystemCaution : Theme.SecondaryText)
+                        .VAlign(VerticalAlignment.Center),
+                    HStack(
+                            8,
+                            Button("保存", SaveDraft).AccentButton().IsEnabled(dirty).AutomationName("保存"),
+                            Button("关闭", RequestClose).AutomationName("关闭"))
+                        .Grid(column: 1),
+                ]));
+    }
+
+    /// <summary>输入框改动：只写草稿，不落盘（等用户点「保存」）。</summary>
+    private void SetDraft(Func<AppSettings, AppSettings> transform)
+    {
+        // 字段立刻跟上，不等下一次 Render：否则「保存」后马上点关闭，守卫会拿着旧值
+        // 误判成"还有未保存的输入"。
+        _draft = transform(_draft);
+        _setDraft(_draft);
+    }
 
     /// <summary>
-    /// 用「当前全局值」做变换：连续输入/勾选时不会互相覆盖（每个字段都基于最新值叠加）。
+    /// 开关 / 下拉框改动：立即生效并写盘（这类选项只有"要"或"不要"，没有输一半的状态）。
+    /// 草稿同步跟上，否则「有输入还没保存」会被开关的改动污染。
     /// </summary>
-    private void SetField(Func<AppSettings, AppSettings> transform) => SettingsState.Current.Update(transform);
-
-    private void SaveNow()
+    private void ApplyLive(Func<AppSettings, AppSettings> change)
     {
+        SettingsState.Current.Update(change);
         SettingsState.Current.SaveNow();
+        _draft = change(_draft);
+        _saved = SettingsState.Current.Value;
+        _setDraft(_draft);
+        _setSaved(_saved);
+    }
+
+    private void SaveDraft()
+    {
+        var draft = _draft;
+        SettingsState.Current.Update(_ => draft);
+        SettingsState.Current.SaveNow();
+        _saved = SettingsState.Current.Value;
+        _setDraft(draft);
+        _setSaved(_saved);
         _setNotice(Notice.Info("配置已保存。"));
+    }
+
+    /// <summary>有没保存的输入就问一句；否则直接关。</summary>
+    private void RequestClose()
+    {
+        if (_draft == _saved || AppWindows.IsExiting)
+        {
+            CloseNow();
+            return;
+        }
+
+        _setCloseAskOpen(true);
+    }
+
+    private void CloseNow()
+    {
+        _closeConfirmed = true;
+        if (_window is null)
+        {
+            return;
+        }
+
+        // 在按钮/对话框回调里直接调 _window.Close() 不生效（实测窗口不关、Closing 也不触发），
+        // 投递到消息循环里再关，走的是和点 X 一样的关闭流程。
+        var window = _window;
+        window.NativeWindow.DispatcherQueue.TryEnqueue(() => window.Close());
+    }
+
+    /// <summary>窗口 X / Alt+F4 的守卫：返回 false 取消这次关闭（先把对话框弹出来）。</summary>
+    private bool CanCloseWindow()
+    {
+        if (_closeConfirmed || AppWindows.IsExiting || _draft == _saved)
+        {
+            return true;
+        }
+
+        _setCloseAskOpen(true);
+        return false;
     }
 
     private void OnProtocolChanged(int index)
     {
         var protocol = index == 1 ? StorageProtocol.S3Compatible : StorageProtocol.AliyunOss;
-        SetField(s => s with
+        ApplyLive(s => s with
         {
             Protocol = protocol,
             // S3 兼容服务（MinIO / RustFS）通常使用路径风格地址。
             PathStyle = protocol == StorageProtocol.S3Compatible,
             Region = protocol == StorageProtocol.S3Compatible && string.IsNullOrWhiteSpace(s.Region) ? "us-east-1" : s.Region,
         });
+    }
+
+    private void OnUrlModeChanged(int index) =>
+        ApplyLive(s => s with { UrlMode = index == 1 ? UrlMode.Direct : UrlMode.Signed });
+
+    private void OnExpireDaysChanged(double value) =>
+        SetDraft(s => s with { SignedUrlExpireDays = (int)Math.Clamp(Math.Round(value), 1, ObjectUrlBuilder.MaxExpireDays) });
+
+    /// <summary>
+    /// 开机自启的开关：先写注册表再落配置。
+    /// 写不进去（策略/权限）就把开关回滚成原状态并给红色提示 —— 不能让界面显示"已开启"而实际没有。
+    /// </summary>
+    private void OnStartWithWindowsChanged(bool enabled)
+    {
+        ApplyLive(s => s with { StartWithWindows = enabled });
+        if (StartupRegistration.TrySet(enabled, out var error))
+        {
+            _setNotice(Notice.Info(enabled
+                ? "已加入开机自启（当前用户）；在任务管理器的「启动」页也能看到并关掉。"
+                : "已取消开机自启。"));
+            return;
+        }
+
+        ApplyLive(s => s with { StartWithWindows = !enabled });
+        _setNotice(Notice.Error($"{(enabled ? "开启" : "关闭")}开机自启失败：{error}"));
     }
 
     private async void OnTestConnection()
@@ -927,7 +1253,9 @@ public sealed class SettingsWindow : Component
             return;
         }
 
-        var missing = _settings.Validate();
+        // 用输入框里的当前内容测（哪怕还没保存），这样"改完先试一下"就能直接试。
+        var candidate = _draft;
+        var missing = candidate.Validate();
         if (missing.Count > 0)
         {
             _setNotice(Notice.Error("请先填写：" + string.Join("、", missing)));
@@ -936,14 +1264,16 @@ public sealed class SettingsWindow : Component
 
         _setTesting(true);
         _setNotice(null);
+        var unsaved = _draft != _saved;
+        var savedHint = unsaved ? "（用的是输入框里的内容，点「保存」才会生效）" : string.Empty;
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var client = new ObjectStorageClient(_settings);
+            var client = new ObjectStorageClient(candidate);
             var head = await client.HeadBucketAsync(cts.Token);
             if (head.Success)
             {
-                _setNotice(Notice.Info($"连接成功：桶 {_settings.Bucket} 可访问。"));
+                _setNotice(Notice.Info($"连接成功：桶 {candidate.Bucket} 可访问。{savedHint}"));
                 return;
             }
 
@@ -952,8 +1282,8 @@ public sealed class SettingsWindow : Component
                 var create = await client.CreateBucketAsync(cts.Token);
                 _setNotice(
                     create.Success
-                        ? Notice.Info($"桶 {_settings.Bucket} 不存在，已自动创建。")
-                        : Notice.Error($"桶 {_settings.Bucket} 不存在，创建失败：{create.Describe()}"));
+                        ? Notice.Info($"桶 {candidate.Bucket} 不存在，已自动创建。{savedHint}")
+                        : Notice.Error($"桶 {candidate.Bucket} 不存在，创建失败：{create.Describe()}"));
                 return;
             }
 
@@ -1000,11 +1330,5 @@ public sealed class SettingsWindow : Component
         {
             // 打不开资源管理器时忽略。
         }
-    }
-
-    private void CloseWindow()
-    {
-        SettingsState.Current.SaveNow();
-        _window?.Close();
     }
 }

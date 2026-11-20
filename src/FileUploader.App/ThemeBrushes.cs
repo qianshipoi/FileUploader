@@ -25,6 +25,8 @@ internal static class ThemeBrushes
     private static readonly Brush AccentFallback = new SolidColorBrush(Color.FromArgb(0xFF, 0x00, 0x5F, 0xB8));
     private static readonly Brush SecondaryTextFallback = new SolidColorBrush(Color.FromArgb(0xFF, 0x6B, 0x6B, 0x6B));
 
+    private static readonly Brush PageBackgroundFallback = new SolidColorBrush(Color.FromArgb(0xFF, 0xF3, 0xF3, 0xF3));
+
     /// <summary>拖拽区的虚线描边：强调色（悬停/拖拽中）或中性描边色。</summary>
     public static Brush Stroke(bool accent) => accent
         ? TryGetFirst("AccentFillColorDefaultBrush", "SystemControlHighlightAccentBrush") ?? AccentFallback
@@ -39,6 +41,14 @@ internal static class ThemeBrushes
     /// <summary>次要文字色（TestPulseIcon 的折线与底图）。</summary>
     public static Brush SecondaryText =>
         TryGetFirst("TextFillColorSecondaryBrush", "TextFillColorPrimaryBrush") ?? SecondaryTextFallback;
+
+    /// <summary>
+    /// 设置页的页面底色：比卡片略深一点，白色卡片才有层次（深色主题下跟着变深）。
+    /// 取不到时退回 Windows 浅色主题的 #F3F3F3。
+    /// </summary>
+    public static Brush PageBackground =>
+        TryGetFirst("SolidBackgroundFillColorBaseBrush", "LayerFillColorDefaultBrush", "ApplicationPageBackgroundThemeBrush")
+        ?? PageBackgroundFallback;
 
     /// <summary>强调色（TestPulseIcon 的扫描亮线）。</summary>
     public static Brush Accent =>

@@ -1,4 +1,4 @@
-using System.Drawing;
+﻿using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
@@ -206,9 +206,10 @@ internal static class AppWindows
             new WindowSpec
             {
                 Title = "设置",
-                Width = 780,
-                Height = 840,
-                MinWidth = 640,
+                // 左边分类固定 150，右边一页一屏：比之前"一长串卡片滚动"更窄也更矮。
+                Width = 860,
+                Height = 740,
+                MinWidth = 660,
                 MinHeight = 600,
                 StartPosition = WindowStartPosition.CenterOnCurrent,
             },
