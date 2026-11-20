@@ -70,7 +70,7 @@ src/FileUploader.App/               WinUI 3 + Reactor 界面
   UploadQueue.cs                    全局上传队列（主窗口与气泡共用）
   AppWindows.cs                     窗口切换：主窗口 / 设置 / 气泡 / 托盘图标与菜单
   UploadApp.Uploading.cs            上传队列（并发 3、进度、取消、历史落盘）
-  SettingsWindow.cs                 独立的设置窗口（存储 + 上传与链接 + 启动与托盘 + 关于与更新）
+  SettingsWindow.cs                 独立的设置窗口（左侧分类：连接 / 上传 / 启动 / 关于；输入框点「保存」才落盘）
   StartupRegistration.cs            开机自启（HKCU Run 启动项：写入 / 删除 / 启动时校正）
   AppVersion.cs                     当前版本号（来自 csproj 的 <Version>，发版时由 tag 覆盖）
   SingleInstance.cs                 同一份 exe 只跑一份（锁名带 exe 路径哈希，副本之间互不影响）
@@ -102,6 +102,13 @@ dotnet run --project tools\FileUploader.Verify -c Release -- multipart
 ```
 
 回归脚本清单与约定见 [AGENTS.md](../AGENTS.md) §5（全部在 `tools/` 下，优先 UI Automation 或直接消息断言，不依赖真实鼠标）。
+
+设置页的保存策略回归（会临时改 `settings.json` 里的 `KeyPrefix`，跑完自动改回去）：
+
+```powershell
+# 输入框不落盘 → 点保存才写盘 → 关窗提示 → 不保存丢草稿（16 项）
+pwsh -NoProfile -File tools\settings-save-test.ps1
+```
 
 更新的两条端到端回归：
 
@@ -209,7 +216,8 @@ pwsh -File tools\uia-resume-test.ps1 -DumpTexts -DumpButtons
 - **便携版不再自我替换**（0.4.0 起）：便携版就是用户手上的一个文件，自替换在 U 盘/只读目录/多副本场景下只会失败，而且用户没法留旧版回滚。现在便携版只「下载新版 + 给出路径和 SHA256」，替换留给人。
 - **静默升级要有人把程序拉起来**：应用启动安装器后自己就退出了，`[Run]` 里配 `Flags: nowait; Check: WizardSilent` —— 只在静默（=自动更新）时执行，交互式安装仍由用户在完成页勾选「运行」。
 - **从工作区里启动的 exe 会被沙箱化（低完整性）**：这类进程写不了 `%TEMP%`（写 `%TEMP%\FileUploader\update-x` 直接 `Access denied`），更新会失败。这是环境限制不是程序 bug —— 把 exe 放到工作区外（例如 `%LOCALAPPDATA%`）再测就正常；用 `Get-Process` 拿不到，需要读进程令牌的完整性级别才能看出来。
-- **Inno 卸载时"文件被占用"是常态**：卸载瞬间 exe 可能还被上一个进程的句柄占着，日志里是 `Failed to delete the file; it may be in use (5)`，Inno 会安排重启时删除；回归脚本里对这一点做了重试。- **后台进程抢不到前台**（托盘点击）：`SetForegroundWindow` 会被前台锁定规则静默拒绝，需要 `AttachThreadInput` 挂到当前前台线程（见 `WindowForeground`）。
+- **Inno 卸载时"文件被占用"是常态**：卸载瞬间 exe 可能还被上一个进程的句柄占着，日志里是 `Failed to delete the file; it may be in use (5)`，Inno 会安排重启时删除；回归脚本里对这一点做了重试。
+- **后台进程抢不到前台**（托盘点击）：`SetForegroundWindow` 会被前台锁定规则静默拒绝，需要 `AttachThreadInput` 挂到当前前台线程（见 `WindowForeground`）。
 - **单实例与自更新会打架**：自更新「先起新版再退自己」前必须交还实例锁，否则新版会当成第二份而退出。
 - **分片上传的签名要带上子资源**：`?uploads` / `?partNumber=N&uploadId=...` / `?uploadId=...` 都要进待签名字符串。OSS V1 只把**子资源**按名字排序拼进 CanonicalizedResource、**值不编码**（`?uploads` 连 `=` 都不要）；SigV4 则要求所有参数排序 + 严格编码、空值写成 `uploads=`。两者不能共用一套拼法（见 `ObjectStorageClient.BuildOssCanonicalResource` / `BuildSigV4CanonicalQuery`，`FileUploader.Verify multipart` 里有逐字符断言）。
 - **OSS 的 CompleteMultipartUpload 出错也回 200**：错误放在响应体里（`<Error>…`）。只看状态码会把"没合并成功"当成成功，链接打开是 404 —— 现在成功分支也会扫一遍响应体。
@@ -217,3 +225,8 @@ pwsh -File tools\uia-resume-test.ps1 -DumpTexts -DumpButtons
 - **续传必须沿用原来的对象键和分片大小**：键一变就是另一个对象，分片大小一变分片边界就跟服务端已经收下的那些对不上。所以会话里存了键和 `PartSize`，`UploadQueue` 在入队时先用 `MultipartUploader.FindPending` 找有没有可续传的会话并沿用它的键。
 - **RustFS 1.0.6 + Windows 绑挂目录（`-v ${PWD}\...:/data`）能初始化、能传分片，但 CompleteMultipartUpload 一定回 404 `NoSuchKey`**：`multipart/` 和 `multipart-index-v1/` 都在，`.mpu-completions/…/original.xl.meta` 也写了，就是合并不成功；换成 Docker 命名卷（或 Linux 主机）立刻正常。所以本地验证分片上传用命名卷；简单的 `PUT Object` 不受影响，这就是当初用绑挂目录也能跑通上传、下载、预签名链接的原因。
 - **RustFS 的 Abort 之后目录还在**：`.rustfs.sys/multipart/<hash>` 可能留一个空壳，但语义上已经没了（再拿这个 uploadId 去 Complete 会回 `NoSuchUpload`）。别拿"目录还在"当成没清掉。
+- **`ReactorWindow.Close()` 在按钮/对话框回调里不生效**：实测窗口不关，`Closing` 和关窗守卫一次都没被调用。改成把关闭投递到 UI 队列（`NativeWindow.DispatcherQueue.TryEnqueue(() => window.Close())`），走的是和点窗口 × 一样的路径。
+- **关窗守卫是"钩子"**：`UseClosingGuard(predicate)` 必须直接在 `Render` 里无条件调用；塞进 `UseEffect` 会被分析器拦下（`REACTOR_HOOKS_001`，钩子顺序不稳定），而且它返回 `void`，不用自己注销。
+- **UIA 的 `ValuePattern.SetValue` 落到受控 TextBox 上偶尔会粘出脏值**（重绘时挨着插入，出现过 `cfostmp-x` 这种）：回归脚本 SetValue 之后必须读回来比对，不一致就当场报错。
+- **点「保存」会重建页脚按钮**：紧接着的程序化点击偶尔落在旧按钮上而"没反应"（真人手速不会这么快）。回归脚本因此在保存后等一帧再继续点，关窗那一步允许重试一次。
+- **设置页的导航用原生 `NavigationView`**（`Factories.NavigationView(items, content)` + `with { SelectedTag = ... }`）：自己用 Button 拼一排导航，怎么调都差一口气——选中条、悬停、键盘导航、窄窗口收成图标栏这些系统行为都得手写。注意它在 UIA 里是 **ListItem + SelectionItemPattern**，不是 Button，回归脚本按名字找元素后要优先用 `SelectionItemPattern.Select()`。

@@ -40,7 +40,7 @@ powershell -File build-installer.ps1            # → dist\FileUploader-<版本>
 因为密钥用 DPAPI 加密、换机器解不开，所以分发靠一个**导出文件**：
 
 1. 自己机器上先配好、点「测试连接」确认可用。
-2. 设置窗口点 **「导出配置」** → 在 exe 同目录生成 `FileUploader.export.bin`。
+2. 设置窗口 → **关于** → 点 **「导出配置」** → 在 exe 同目录生成 `FileUploader.export.bin`。
 3. 把 `FileUploader.exe` + `FileUploader.export.bin` 放进同一个目录发给对方。
 4. 对方双击 exe：
    - 自动导入配置并写入本机存储（密钥重新用 DPAPI 加密）；

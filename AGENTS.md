@@ -96,7 +96,8 @@ dotnet run --project tools\FileUploader.Verify -c Release
 
 | 脚本 | 覆盖内容 |
 |---|---|
-| `uia-settings.ps1` | 设置窗口编辑链路（UI Automation，不依赖鼠标） |
+| `uia-settings.ps1` | 设置窗口编辑链路（UI Automation，不依赖鼠标）：切分类、填输入框（改完读回校验）、点开关、点「保存/关闭」 |
+| `settings-save-test.ps1` | 设置页保存策略：输入框不落盘 → 点「保存」才写盘 → 带草稿关窗弹「保存并关闭 / 不保存 / 取消」（会临时改 `settings.json` 的 `KeyPrefix`，结束自动改回） |
 | `uia-history-search.ps1` | 历史记录：按文件名搜索 / 清除搜索 / 「下载」弹出的保存对话框（不依赖鼠标） |
 | `uia-resume-test.ps1` | 断点续传：列表里出现「已中断 · 已传 xx%」→ 点「继续」→ 等到「已上传」（前置：上传被打断过，见 `docs/development.md`） |
 | `uia-tray-menu.ps1` | 托盘菜单结构与点击 |
