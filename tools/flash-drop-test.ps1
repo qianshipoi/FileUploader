@@ -202,9 +202,40 @@ function Get-FlashBox([object]$win) {
     return $win.FindFirst($TS::Descendants, $cond)
 }
 
-# 每次切换后 Reactor 会重建元素，所以每次都重新找一遍
+# 设置页改成「左侧分类 + 右侧一页」之后，这个开关在「启动」页里，默认打开的「连接」页上根本没有它。
+# 原生 NavigationView 的导航项在 UIA 里是 ListItem（SelectionItemPattern），不是 Button
+# （和 uia-settings.ps1 里 Show-Page 的做法一致）。
+function Show-SettingsPage([string]$name) {
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        $win = Get-SettingsWindow
+        if (-not $win) { continue }
+        $cond = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $name)
+        foreach ($e in $win.FindAll($TS::Descendants, $cond)) {
+            try {
+                $e.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+                Start-Sleep -Milliseconds 450
+                return $true
+            }
+            catch { }
+
+            try {
+                $e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+                Start-Sleep -Milliseconds 450
+                return $true
+            }
+            catch { }
+        }
+
+        Start-Sleep -Milliseconds 400
+    }
+
+    return $false
+}
+
+# 每次切换后 Reactor 会重建元素（页面也可能回到默认分类），所以每次都重新选分类、重新找一遍
 function Set-FlashToggle([string]$want) {
     for ($i = 0; $i -lt 6; $i++) {
+        if (-not (Show-SettingsPage "启动")) { continue }
         $win = Get-SettingsWindow
         if (-not $win) { return $false }
         $box = Get-FlashBox $win
