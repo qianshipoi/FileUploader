@@ -146,6 +146,12 @@ internal sealed class FlashDropWindow : IDisposable
     private int _previewStep;
     private bool _mouseDownOnSelf;
 
+    /// <summary>
+    /// 拖进来的文件还在「读路径 → 入队」这段异步流程里（队列中暂时一条记录都没有）。
+    /// 这期间不能把「没有活动任务」当成「这批已经结束」，否则气泡会被提前收掉。
+    /// </summary>
+    private int _enqueuePending;
+
     // 「探针」：按住左键拖一小段距离后，把隐形窗口跟到光标下面，任何真实的 OLE 拖放
     // 都会在 DragEnter 里暴露出来（选中文字不会有 OLE 拖放，所以不会误报）。
     private bool _spyTracking;
@@ -515,6 +521,10 @@ internal sealed class FlashDropWindow : IDisposable
     {
         FlashLog.Info($"Drop: {paths.Count} 个文件 -> {string.Join(",", paths.Take(3))}");
         _afterDragLeave = false;
+
+        // 先立标记再切状态：入队是异步的，这段时间队列里还没有任何记录，
+        // 不能把「暂无活动任务」当成「这批已经结束」。
+        Interlocked.Exchange(ref _enqueuePending, 1);
         RefreshSnapshot();
         SetState(FlashDropState.Uploading);
         _ = EnqueueAsync(paths);
@@ -522,31 +532,40 @@ internal sealed class FlashDropWindow : IDisposable
 
     private async Task EnqueueAsync(IReadOnlyList<string> paths)
     {
-        var items = new List<IStorageItem>();
-        foreach (var path in paths)
+        try
         {
-            try
+            var items = new List<IStorageItem>();
+            foreach (var path in paths)
             {
-                items.Add(Directory.Exists(path)
-                    ? await StorageFolder.GetFolderFromPathAsync(path)
-                    : await StorageFile.GetFileFromPathAsync(path));
+                try
+                {
+                    items.Add(Directory.Exists(path)
+                        ? await StorageFolder.GetFolderFromPathAsync(path)
+                        : await StorageFile.GetFileFromPathAsync(path));
+                }
+                catch (Exception)
+                {
+                    // 读不到的条目跳过（和简洁模式气泡一致）。
+                }
             }
-            catch (Exception)
-            {
-                // 读不到的条目跳过（和简洁模式气泡一致）。
-            }
-        }
 
-        if (items.Count > 0)
+            if (items.Count > 0)
+            {
+                await _queue.EnqueueAsync(items);
+                return;
+            }
+
+            // 一个都读不到（路径失效 / 拖来的是虚拟文件）：给个明确反馈，别让气泡一直停在「上传中」。
+            _resultMessage = "读不到这些文件";
+            _pendingResult = 2;
+        }
+        finally
         {
-            await _queue.EnqueueAsync(items);
-            return;
+            // 入队结束后让窗口线程再复核一次：这时队列里要么已经有任务（继续显示进度），
+            // 要么一个都没进（上面的「读不到」），要么已经结束了 —— 都交给 OnQueueMessage 收场。
+            Interlocked.Exchange(ref _enqueuePending, 0);
+            Post(WmAppQueue);
         }
-
-        // 一个都读不到（路径失效 / 拖来的是虚拟文件）：给个明确反馈，别让气泡一直停在「上传中」。
-        _resultMessage = "读不到这些文件";
-        _pendingResult = 2;
-        Post(WmAppQueue);
     }
 
     // ── 队列订阅 ────────────────────────────────────────────────────────
@@ -637,6 +656,17 @@ internal sealed class FlashDropWindow : IDisposable
         }
 
         Render();
+
+        // 兜底：这批上传既没成功也没失败，却一个活动任务都不剩了 —— 那就是用户在列表里
+        // 取消并移除了它（取消只改条目状态，不触发 Uploaded / Failed）。
+        // 不收起来的话气泡会一直停在「正在上传 0%」，看着像还在传。
+        if ((FlashDropState)_state == FlashDropState.Uploading
+            && Volatile.Read(ref _enqueuePending) == 0
+            && !_queue.IsBusy)
+        {
+            FlashLog.Info("no active uploads left (canceled/removed) -> hibernate");
+            Hibernate();
+        }
     }
 
     private void RefreshSnapshot()

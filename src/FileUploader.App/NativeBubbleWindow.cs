@@ -276,7 +276,10 @@ internal sealed class NativeBubbleWindow : IDisposable
         if (active.Length == 0)
         {
             _percent = 0;
-            if (force)
+
+            // 取消 / 移除不会触发成功或失败事件：不把相位收回 Idle，气泡就会一直停在
+            // 「0% · 0 个文件」，看着像还在传。成功/失败提示自带 2.6 秒，这里不动它们。
+            if (force || (Phase)_phase is Phase.Preparing or Phase.Uploading)
             {
                 _phase = (int)Phase.Idle;
                 _flashText = string.Empty;

@@ -14,6 +14,7 @@
 - 整块点击热区实测：在拖拽区中心点一下，只弹 1 个系统文件对话框（`_isPicking` 连点保护），取消后无异常提示且不产生上传记录。
 - 简洁模式反复进出 4 次（每次新建/销毁原生气泡窗口）进程稳定，无 `crash.log`；气泡窗口意外消失时主窗口会自动恢复。
 - 拖拽浮现气泡（`tools/flash-drop-test.ps1`）：窗口贴在右下角工作区、预览显示期间可命中自己、装睡时点击穿透到下层窗口、`RegisterDragDrop` 返回 0、无 `crash.log`。
+- **上传中取消 / 移除后气泡自动收起**（`tools/flash-cancel-test.ps1`）：本机「黑洞」端口（accept 后不读不回）把上传挂住 → 真实从资源管理器拖一个文件到右下角气泡（日志 `state -> Uploading`）→ 列表里点「取消」→ 1 秒内日志出现 `no active uploads left (canceled/removed)` 与 `state -> Dormant`，`WindowFromPoint` 该处不再命中气泡（确实收起且不挡鼠标）；再点「移除」也不会被勾回「正在上传」。同一脚本在去掉兜底的版本上跑会失败（气泡停在「正在上传 0%」且仍可点击），确认脚本真能抓到这个 bug。
 - 设置窗口与主窗口共享同一份配置：任一侧修改，另一侧即时刷新；密钥 DPAPI 加解密往返、落盘无明文。
 - 新设置页布局用 UI 自动化验证过（`tools/uia-settings.ps1`，窗口标题改为「设置」）：Endpoint / 桶名 / AccessKey ID 按标题找到、协议下拉、HTTPS 与「静默启动」开关都能点，保存后 `settings.json` 里 `StartSilently` 为 `true`。
 - 「静默启动」四种启动路径实测（便携模式，不碰真实配置）：开着 + 已配置 → 主窗口 `IsWindowVisible=False` 且进程存活；关掉 → 主窗口可见；开着但没配置 → 主窗口可见；开着且命令行带文件 → 主窗口可见。20ms 采样下窗口可见仅 1 帧（≈20ms），没有明显闪烁。
